@@ -1,0 +1,21 @@
+name: napari-SAM4IS
+display_name: napari-SAM4IS
+contributions:
+  commands:
+    - id: napari-SAM4IS.make_qwidget
+      python_name: napari_sam4is._widget:ExampleQWidget
+      title: Make example QWidget
+    - id: napari-SAM4IS.make_magic_widget
+      python_name: napari_sam4is._widget:example_magic_widget
+      title: Make example magic widget
+    - id: napari-SAM4IS.make_func_widget
+      python_name: napari_sam4is._widget:example_function_widget
+      title: Make example function widget
+  widgets:
+    - command: napari-SAM4IS.make_qwidget
+      display_name: Example QWidget
+    - command: napari-SAM4IS.make_magic_widget
+      display_name: Example Magic Widget
+    - command: napari-SAM4IS.make_func_widget
+      autogenerate: true
+      display_name: Example Function Widget
