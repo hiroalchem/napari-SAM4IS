@@ -1,11 +1,13 @@
+import json
+import os
+
 import napari
 import numpy as np
 import torch
-from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel
+from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel, QButtonGroup, QRadioButton
 from segment_anything import sam_model_registry, SamPredictor
-from skimage.color import gray2rgb, rgba2rgb
 
-from ._utils import load_model, preprocess, label2polygon
+from ._utils import load_model, preprocess, label2polygon, create_json, check_image_type
 
 
 class SAMWidget(QWidget):
@@ -13,8 +15,14 @@ class SAMWidget(QWidget):
         super().__init__()
         self._viewer = napari_viewer
 
-        self.vbox = QVBoxLayout()
+        self._shapes_layer_selection = None
+        self._labels_layer_selection = None
+        self._image_type = None
+        self._current_slice = None
 
+        #self._corner = None
+
+        self.vbox = QVBoxLayout()
         self._model_selection = QComboBox()
         self._model_selection.addItems(list(sam_model_registry.keys()))
         self.vbox.addWidget(self._model_selection)
@@ -26,16 +34,48 @@ class SAMWidget(QWidget):
         self._image_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.image.image.Image)])
         self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
         self.vbox.addWidget(self._image_layer_selection)
+
+        self.vbox.addWidget(QLabel("select output layer type \nif you want to use the output\nas a mask, select 'semantic'.\n"
+                                   "3D image is currently only\nsupported for 'semantic'"))
+        self._radio_btn_group = QButtonGroup()
+        self._radio_btn_shape = QRadioButton("instance (Shapes layer)")
+        self._radio_btn_shape.toggled.connect(self._on_radio_btn_toggled)
+        self._radio_btn_label = QRadioButton("semantic (Labels layer)")
+        self._radio_btn_label.toggled.connect(self._on_radio_btn_toggled)
+        self._radio_btn_group.addButton(self._radio_btn_shape, 0)
+        self._radio_btn_group.addButton(self._radio_btn_label, 1)
+        self.vbox.addWidget(self._radio_btn_shape)
+        self.vbox.addWidget(self._radio_btn_label)
+
         self.vbox.addWidget(QLabel("output shapes layer"))
         self._shapes_layer_selection = QComboBox()
         self._shapes_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.shapes.shapes.Shapes)])
         self.vbox.addWidget(self._shapes_layer_selection)
 
+        self.vbox.addWidget(QLabel("output labels layer"))
+        self._labels_layer_selection = QComboBox()
+        self._labels_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.labels.labels.Labels)])
+        self.vbox.addWidget(self._labels_layer_selection)
+
+        self.vbox.addWidget(QLabel("Save as coco format \nin the same directory \nwith the input image"))
+        self._save_btn = QPushButton("save")
+        self._save_btn.clicked.connect(self._save)
+        self.vbox.addWidget(self._save_btn)
+
+        self._test_btn = QPushButton("corner")
+        self._test_btn.clicked.connect(self.print_corner_value)
+        self.vbox.addWidget(self._test_btn)
+
         self._sam_box_layer = self._viewer.add_shapes(name="SAM-Box", edge_color="red", edge_width=2, face_color="transparent")
         self._sam_box_layer.mouse_drag_callbacks.append(self._on_sam_box_created)
+        self.lock_controls(self._sam_box_layer)
 
         if self._image_layer_selection.currentText() != "":
-            shape = self._viewer.layers[self._image_layer_selection.currentText()].data.shape[:2]
+            self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
+            if "stack" in self._image_type:
+                shape = self._viewer.layers[self._image_layer_selection.currentText()].data.shape[1:3]
+            else :
+                shape = self._viewer.layers[self._image_layer_selection.currentText()].data.shape[:2]
         else:
             shape = (100, 100)
 
@@ -64,14 +104,31 @@ class SAMWidget(QWidget):
         self._labels_layer.bind_key("R", self._reject_mask)
 
         self._on_layer_list_changed(None)
+        self._radio_btn_shape.setChecked(True)
 
     def _on_layer_list_changed(self, event):
-        self._image_layer_selection.clear()
-        self._image_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.image.image.Image)])
-        [self._viewer.layers.move(i, 0) for i, layer in enumerate(self._viewer.layers) if isinstance(layer, napari.layers.image.image.Image)]
-        self._on_image_layer_changed(None)
-        self._shapes_layer_selection.clear()
-        self._shapes_layer_selection.addItems([layer.name for layer in self._viewer.layers if (isinstance(layer, napari.layers.shapes.shapes.Shapes))&(layer.name != self._sam_box_layer.name)])
+        if event is not None:
+            print(event.value)
+            self._image_layer_selection.clear()
+            self._image_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.image.image.Image)])
+            [self._viewer.layers.move(i, 0) for i, layer in enumerate(self._viewer.layers) if isinstance(layer, napari.layers.image.image.Image)]
+            if isinstance(event.value, napari.layers.image.image.Image):
+                self._on_image_layer_changed(None)
+        self._on_radio_btn_toggled()
+
+    def _on_radio_btn_toggled(self):
+        button_id = self._radio_btn_group.checkedId()
+        if (self._shapes_layer_selection is not None) & (self._labels_layer_selection is not None):
+            if button_id == 0:
+                self._shapes_layer_selection.clear()
+                self._shapes_layer_selection.addItems([layer.name for layer in self._viewer.layers if (isinstance(layer, napari.layers.shapes.shapes.Shapes))&(layer.name != self._sam_box_layer.name)])
+                self._labels_layer_selection.clear()
+                self._save_btn.setEnabled(True)
+            else:
+                self._labels_layer_selection.clear()
+                self._labels_layer_selection.addItems([layer.name for layer in self._viewer.layers if (isinstance(layer, napari.layers.labels.labels.Labels))&(layer.name != self._labels_layer.name)])
+                self._shapes_layer_selection.clear()
+                self._save_btn.setEnabled(False)
 
     def _load_model(self):
         model_name = self._model_selection.currentText()
@@ -79,14 +136,19 @@ class SAMWidget(QWidget):
         self._sam_model.to(device=self.device)
         self.sam_predictor = SamPredictor(self._sam_model)
         if self._image_layer_selection.currentText() != "":
-            self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data))
-            print('set image')
+            self._on_layer_list_changed(None)
 
     def _on_image_layer_changed(self, index):
         print("image_layer_changed")
         if self.sam_predictor is not None:
-            self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data))
+            self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
+            if "stack" in self._image_type:
+                self._current_slice, _, _ = self._viewer.dims.current_step
+            else:
+                self._current_slice = None
+            self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data, self._image_type, self._current_slice))
             print('set image')
+            # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
 
     def _on_sam_box_created(self, layer, event):
         # mouse click
@@ -96,6 +158,13 @@ class SAMWidget(QWidget):
             yield
         # mouse release
         if len(self._sam_box_layer.data) == 1:
+            if "stack" in self._image_type:
+                if self._current_slice == self._viewer.dims.current_step[0]:
+                    pass
+                else:
+                    self._on_image_layer_changed(None)
+            else:
+                pass
             coords = self._sam_box_layer.data[0]
             y1 = int(coords[0][0])
             x1 = int(coords[0][1])
@@ -115,18 +184,74 @@ class SAMWidget(QWidget):
             self._viewer.layers.selection.active = self._labels_layer
 
     def _accept_mask(self, layer):
-        if self._shapes_layer_selection.currentText() != "":
-            output_layer = self._viewer.layers[self._shapes_layer_selection.currentText()]
-            if isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
-                output_layer.add_polygons(label2polygon(self._labels_layer.data), edge_width=6)
-                self._viewer.layers.selection.active = self._sam_box_layer
+        button_id = self._radio_btn_group.checkedId()
+        if button_id == 0:
+            if self._shapes_layer_selection.currentText() != "":
+                output_layer = self._viewer.layers[self._shapes_layer_selection.currentText()]
+                if isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
+                    output_layer.add_polygons(label2polygon(self._labels_layer.data), edge_width=6)
+                    self._viewer.layers.selection.active = self._sam_box_layer
+                else:
+                    pass
+            else:
+                pass
         else:
-            pass
+            if self._labels_layer_selection.currentText() != "":
+                output_layer = self._viewer.layers[self._labels_layer_selection.currentText()]
+                if isinstance(output_layer, napari.layers.labels.labels.Labels):
+                    if self._current_slice is not None:
+                        output_layer.data[self._current_slice] = output_layer.data[self._current_slice] | self._labels_layer.data
+                        output_layer.refresh()
+                    else:
+                        output_layer.data = output_layer.data | self._labels_layer.data
+                    self._viewer.layers.selection.active = self._sam_box_layer
+                else:
+                    pass
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
 
     def _reject_mask(self, layer):
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
         self._viewer.layers.selection.active = self._sam_box_layer
+
+    def _save(self):
+        if self._shapes_layer_selection.currentText() != "":
+            image_layer = self._viewer.layers[self._image_layer_selection.currentText()]
+            image_path = image_layer.source.path
+            image_name = os.path.basename(image_path)
+            output_layer = self._viewer.layers[self._shapes_layer_selection.currentText()]
+            if isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
+                output_path = os.path.join(os.path.dirname(image_path), os.path.splitext(image_name)[0] + ".json")
+                data = create_json(image_layer.data, image_name, output_layer.data)
+                with open(output_path, 'w') as f:
+                    json.dump(data, f)
+                print("saved")
+        else:
+            pass
+
+
+    def lock_controls(self, layer, locked=True):
+        widget_list = [
+            'ellipse_button',
+            'line_button',
+            'path_button',
+            'vertex_remove_button',
+            'vertex_insert_button',
+            'move_back_button',
+            'move_front_button',
+            'polygon_button',
+            'select_button',
+            'direct_button',
+            'delete_button',
+        ]
+        qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
+        for wdg in widget_list:
+            getattr(qctrl, wdg).setEnabled(not locked)
+
+
+    def print_corner_value(self):
+        print(self._viewer.dims.current_step)
+        print(self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels)
+
 
 
 
