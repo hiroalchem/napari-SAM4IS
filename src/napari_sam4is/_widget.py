@@ -61,10 +61,11 @@ class SAMWidget(QWidget):
         self._save_btn = QPushButton("save")
         self._save_btn.clicked.connect(self._save)
         self.vbox.addWidget(self._save_btn)
-
+        """
         self._test_btn = QPushButton("corner")
         self._test_btn.clicked.connect(self.print_corner_value)
         self.vbox.addWidget(self._test_btn)
+        """
 
         self._sam_box_layer = self._viewer.add_shapes(name="SAM-Box", edge_color="red", edge_width=2, face_color="transparent")
         self._sam_box_layer.mouse_drag_callbacks.append(self._on_sam_box_created)
