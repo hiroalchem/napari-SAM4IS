@@ -8,7 +8,7 @@
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-SAM4IS)](https://napari-hub.org/plugins/napari-SAM4IS)
 
 
-### napari plugin for instance and semantic segmentation annotation using Segment Anything models
+### napari plugin for instance and semantic segmentation annotation using Segment Anything Model (SAM)
 
 This is a plugin for [napari](https://napari.org/), a multi-dimensional image viewer for Python, that allows for instance and semantic segmentation annotation. This plugin provides an easy-to-use interface for annotating images with the option to output annotations as COCO format.
 
@@ -25,6 +25,44 @@ https://napari.org/stable/plugins/index.html
 -->
 
 ## Installation
+
+To use this plugin, you'll need to install the [napari](https://napari.org/stable/tutorials/fundamentals/installation.html) multi-dimensional image viewer and the [Segment Anything Model (SAM)](https://github.com/facebookresearch/segment-anything) library.
+
+### napari Installation
+
+You can install napari using pip:
+
+```
+pip install "napari[all]"
+```
+
+Alternatively, you can install napari and all of its dependencies with conda:
+
+```
+conda install -c conda-forge napari
+```
+
+For more detailed instructions, please refer to the [napari installation guide](https://napari.org/stable/tutorials/fundamentals/installation.html).
+
+### SAM Installation
+
+You can install SAM from the [official GitHub repository](https://github.com/facebookresearch/segment-anything) using pip:
+
+```
+pip install git+https://github.com/facebookresearch/segment-anything.git
+```
+
+Or you can install from source by cloning the repository:
+
+```
+git clone https://github.com/facebookresearch/segment-anything.git
+cd segment-anything
+pip install -e .
+```
+
+For more detailed instructions, please refer to the [SAM installation guide](https://github.com/facebookresearch/segment-anything#installation).
+
+### napari-SAM4IS Installation
 
 You can install `napari-SAM4IS` via [pip]:
 
