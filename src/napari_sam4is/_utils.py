@@ -67,6 +67,7 @@ def preprocess(image, layer_type, current_step=None):
 
 def check_image_type(viewer, layer_name):
     image = viewer.layers[layer_name].data
+    print(f'current image shape = {image.shape}')
     if len(image.shape) == 2: # Gray
         return "Gray"
     elif len(image.shape) > 4:

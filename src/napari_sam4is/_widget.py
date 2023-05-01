@@ -136,8 +136,9 @@ class SAMWidget(QWidget):
         self._sam_model = load_model(model_name)
         self._sam_model.to(device=self.device)
         self.sam_predictor = SamPredictor(self._sam_model)
+        print("model loaded")
         if self._image_layer_selection.currentText() != "":
-            self._on_layer_list_changed(None)
+            self._on_image_layer_changed(None)
 
     def _on_image_layer_changed(self, index):
         print("image_layer_changed")
