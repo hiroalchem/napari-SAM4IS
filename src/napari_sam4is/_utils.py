@@ -8,7 +8,7 @@ from skimage.draw import polygon2mask
 from skimage.measure import find_contours
 
 
-def load_model(model_name):
+def load_model(model_name: str = 'default') -> sam_model_registry:
     """Load model
 
     Args:
@@ -29,7 +29,7 @@ def load_model(model_name):
     return sam
 
 
-def autodownload(model_url):
+def autodownload(model_url: str):
     """Download model
 
     Args:
