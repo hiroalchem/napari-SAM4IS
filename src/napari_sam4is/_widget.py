@@ -4,10 +4,10 @@ import os
 import napari
 import numpy as np
 import torch
-from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel, QButtonGroup, QRadioButton
+from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel, QButtonGroup, QRadioButton, QCheckBox
 from segment_anything import sam_model_registry, SamPredictor
 
-from ._utils import load_model, preprocess, label2polygon, create_json, check_image_type
+from ._utils import load_model, preprocess, label2polygon, create_json, check_image_type, find_first_missing
 
 
 class SAMWidget(QWidget):
@@ -38,17 +38,21 @@ class SAMWidget(QWidget):
         self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
         self.vbox.addWidget(self._image_layer_selection)
 
-        self.vbox.addWidget(QLabel("select output layer type \nif you want to use the output\nas a mask, select 'semantic'.\n"
-                                   "3D image is currently only\nsupported for 'semantic'"))
+        self.vbox.addWidget(QLabel("select output layer type \nif you want to use the output\n"
+                                   "as a mask, select 'labels'.\n"
+                                   "3D image is currently only\nsupported for 'labels'"))
         self._radio_btn_group = QButtonGroup()
         self._radio_btn_shape = QRadioButton("instance (Shapes layer)")
         self._radio_btn_shape.toggled.connect(self._on_radio_btn_toggled)
-        self._radio_btn_label = QRadioButton("semantic (Labels layer)")
+        self._radio_btn_label = QRadioButton("labels (Labels layer)")
         self._radio_btn_label.toggled.connect(self._on_radio_btn_toggled)
         self._radio_btn_group.addButton(self._radio_btn_shape, 0)
         self._radio_btn_group.addButton(self._radio_btn_label, 1)
         self.vbox.addWidget(self._radio_btn_shape)
         self.vbox.addWidget(self._radio_btn_label)
+
+        self.check_box = QCheckBox("instance labels")
+        self.vbox.addWidget(self.check_box)
 
         self.vbox.addWidget(QLabel("output shapes layer"))
         self._shapes_layer_selection = QComboBox()
@@ -134,11 +138,16 @@ class SAMWidget(QWidget):
                 self._shapes_layer_selection.addItems([layer.name for layer in self._viewer.layers if (isinstance(layer, napari.layers.shapes.shapes.Shapes))&(layer.name != self._sam_box_layer.name)])
                 self._labels_layer_selection.clear()
                 self._save_btn.setEnabled(True)
+                self.check_box.setEnabled(False)
+                self.check_box.setStyleSheet("text-decoration: line-through")
+
             else:
                 self._labels_layer_selection.clear()
                 self._labels_layer_selection.addItems([layer.name for layer in self._viewer.layers if (isinstance(layer, napari.layers.labels.labels.Labels))&(layer.name != self._labels_layer.name)])
                 self._shapes_layer_selection.clear()
                 self._save_btn.setEnabled(False)
+                self.check_box.setEnabled(True)
+                self.check_box.setStyleSheet("text-decoration: none")
 
     def _load_model(self):
         model_name = self._model_selection.currentText()
@@ -240,10 +249,18 @@ class SAMWidget(QWidget):
                 output_layer = self._viewer.layers[self._labels_layer_selection.currentText()]
                 if isinstance(output_layer, napari.layers.labels.labels.Labels):
                     if self._current_slice is not None:
-                        output_layer.data[self._current_slice] = output_layer.data[self._current_slice] | self._labels_layer.data
+                        if self.check_box.isChecked():
+                            num = find_first_missing(output_layer.data[self._current_slice])
+                        else:
+                            num = 1
+                        output_layer.data[self._current_slice] = output_layer.data[self._current_slice] | self._labels_layer.data * num
                         output_layer.refresh()
                     else:
-                        output_layer.data = output_layer.data | self._labels_layer.data
+                        if self.check_box.isChecked():
+                            num = find_first_missing(output_layer.data)
+                        else:
+                            num = 1
+                        output_layer.data = output_layer.data | self._labels_layer.data * num
                     self._viewer.layers.selection.active = self._sam_box_layer
                 else:
                     pass
