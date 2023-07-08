@@ -141,3 +141,15 @@ def create_json(image, name, data):
     }
     return json
 
+
+def find_first_missing(arr):
+    arr = np.unique(arr)  # remove duplicates
+    arr = arr[arr >= 0]  # keep only positive values and zero
+    arr.sort()  # sort the array
+
+    # check for missing integers
+    for index, value in np.ndenumerate(arr):
+        if index[0] != value:
+            return index[0]
+    return len(arr)
+
