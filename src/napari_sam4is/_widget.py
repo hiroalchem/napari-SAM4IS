@@ -19,6 +19,9 @@ class SAMWidget(QWidget):
         self._labels_layer_selection = None
         self._image_type = None
         self._current_slice = None
+        self._input_box = None
+        self._input_point = None
+        self._point_label = None
 
         #self._corner = None
 
@@ -70,6 +73,12 @@ class SAMWidget(QWidget):
         self._sam_box_layer = self._viewer.add_shapes(name="SAM-Box", edge_color="red", edge_width=2, face_color="transparent")
         self._sam_box_layer.mouse_drag_callbacks.append(self._on_sam_box_created)
         self.lock_controls(self._sam_box_layer)
+        self._sam_positive_point_layer = self._viewer.add_points(name="SAM-Positive", face_color="green", size=10)
+        self._sam_negative_point_layer = self._viewer.add_points(name="SAM-Negative", face_color="red", size=10)
+        #self._sam_positive_point_layer.mouse_drag_callbacks.append(self._on_sam_point_created)
+        #self._sam_negative_point_layer.mouse_drag_callbacks.append(self._on_sam_point_created)
+        self._sam_positive_point_layer.events.data.connect(self._on_sam_point_changed)
+        self._sam_negative_point_layer.events.data.connect(self._on_sam_point_changed)
 
         if self._image_layer_selection.currentText() != "":
             self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
@@ -172,18 +181,47 @@ class SAMWidget(QWidget):
             x1 = int(coords[0][1])
             y2 = int(coords[2][0])
             x2 = int(coords[2][1])
-            print(x1, y1, x2, y2)
-            input_box = np.array([x1, y1, x2, y2])
-            if self.sam_predictor is not None:
-                masks, _, _ = self.sam_predictor.predict(
-                    point_coords=None,
-                    point_labels=None,
-                    box=input_box[None, :],
-                    multimask_output=False,
-                )
-                self._labels_layer.data = masks[0] * 1
+            print(f"x1 = {x1}, y1 = {y1}, x2 = {x2}, y2 = {y2}")
+            self._input_box = np.array([x1, y1, x2, y2])
+            self._create_input_point()
+            self._predict()
             self._sam_box_layer.data = []
-            self._viewer.layers.selection.active = self._labels_layer
+
+    def _on_sam_point_changed(self):
+        if (len(self._sam_positive_point_layer.data) != 0) or (self._input_box is not None):
+            if "stack" in self._image_type:
+                if self._current_slice == self._viewer.dims.current_step[0]:
+                    pass
+                else:
+                    self._on_image_layer_changed(None)
+            else:
+                pass
+            self._create_input_point()
+            self._predict()
+
+    def _predict(self):
+        if self.sam_predictor is not None:
+            masks, _, _ = self.sam_predictor.predict(
+                point_coords=self._input_point,
+                point_labels=self._point_label,
+                box=self._input_box[None, :] if self._input_box is not None else None,
+                multimask_output=False,
+            )
+            self._labels_layer.data = masks[0] * 1
+        self._viewer.layers.selection.active = self._labels_layer
+
+
+    def _create_input_point(self):
+        positive_points = self._sam_positive_point_layer.data
+        negative_points = self._sam_negative_point_layer.data
+        if len(positive_points) + len(negative_points) == 0:
+            self._input_point = None
+            self._point_label = None
+            return
+        self._point_label = np.array(len(positive_points) * [1] + len(negative_points) * [0])
+        coords = np.concatenate((positive_points, negative_points), axis=0)
+        self._input_point = coords[:, ::-1].astype(np.int32)
+
 
     def _accept_mask(self, layer):
         button_id = self._radio_btn_group.checkedId()
@@ -210,10 +248,18 @@ class SAMWidget(QWidget):
                 else:
                     pass
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+        self._input_box = None
+        self._sam_positive_point_layer.data = []
+        self._sam_negative_point_layer.data = []
+        self._input_point = None
+        self._point_label = None
 
     def _reject_mask(self, layer):
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
         self._viewer.layers.selection.active = self._sam_box_layer
+        self._input_box = None
+        self._sam_positive_point_layer.data = []
+        self._sam_negative_point_layer.data = []
 
     def _save(self):
         if self._shapes_layer_selection.currentText() != "":
