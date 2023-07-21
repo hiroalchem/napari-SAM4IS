@@ -1,0 +1,21 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: napari-sam4IS
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Hiroki
+    family-names: Kawai
+    email: h.kawai888@gmail.com
+    orcid: 'https://orcid.org/0000-0002-7129-2384'
+repository-code: 'https://github.com/hiroalchem/napari-SAM4IS'
+url: 'https://www.napari-hub.org/plugins/napari-SAM4IS'
+abstract: >-
+  napari plugin for instance and semantic segmentation
+  annotation using Segment Anything Model (SAM)
+license: Apache-2.0
+version: 0.0.5
