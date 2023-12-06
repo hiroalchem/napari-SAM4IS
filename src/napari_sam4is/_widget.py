@@ -22,6 +22,7 @@ class SAMWidget(QWidget):
         self._input_box = None
         self._input_point = None
         self._point_label = None
+        self._current_target_image_name = None
 
         #self._corner = None
 
@@ -35,7 +36,7 @@ class SAMWidget(QWidget):
         self.vbox.addWidget(QLabel("input image layer"))
         self._image_layer_selection = QComboBox()
         self._image_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.image.image.Image)])
-        self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
+        # self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
         self.vbox.addWidget(self._image_layer_selection)
 
         self.vbox.addWidget(QLabel("select output layer type \nif you want to use the output\n"
@@ -84,11 +85,11 @@ class SAMWidget(QWidget):
         self._sam_positive_point_layer.events.data.connect(self._on_sam_point_changed)
         self._sam_negative_point_layer.events.data.connect(self._on_sam_point_changed)
 
-        if self._image_layer_selection.currentText() != "":
+        if (self._image_layer_selection.currentText() != "")&(self._image_layer_selection.currentText() in self._viewer.layers):
             self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
             if "stack" in self._image_type:
                 shape = self._viewer.layers[self._image_layer_selection.currentText()].data.shape[1:3]
-            else :
+            else:
                 shape = self._viewer.layers[self._image_layer_selection.currentText()].data.shape[:2]
         else:
             shape = (100, 100)
@@ -127,7 +128,7 @@ class SAMWidget(QWidget):
             self._image_layer_selection.addItems([layer.name for layer in self._viewer.layers if isinstance(layer, napari.layers.image.image.Image)])
             [self._viewer.layers.move(i, 0) for i, layer in enumerate(self._viewer.layers) if isinstance(layer, napari.layers.image.image.Image)]
             if isinstance(event.value, napari.layers.image.image.Image):
-                self._on_image_layer_changed(None)
+               self._on_image_layer_changed(None)
         self._on_radio_btn_toggled()
 
     def _on_radio_btn_toggled(self):
@@ -161,14 +162,17 @@ class SAMWidget(QWidget):
     def _on_image_layer_changed(self, index):
         print("image_layer_changed")
         if self.sam_predictor is not None:
-            self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
-            if "stack" in self._image_type:
-                self._current_slice, _, _ = self._viewer.dims.current_step
-            else:
-                self._current_slice = None
-            self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data, self._image_type, self._current_slice))
-            print('set image')
-            # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
+            if (self._image_layer_selection.currentText() != "")&(self._image_layer_selection.currentText() in self._viewer.layers):
+                if self._current_target_image_name != self._image_layer_selection.currentText():
+                    self._current_target_image_name = self._image_layer_selection.currentText()
+                    self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
+                    if "stack" in self._image_type:
+                        self._current_slice, _, _ = self._viewer.dims.current_step
+                    else:
+                        self._current_slice = None
+                    self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data, self._image_type, self._current_slice))
+                    print('set image')
+                    # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
 
     def _on_sam_box_created(self, layer, event):
         # mouse click
