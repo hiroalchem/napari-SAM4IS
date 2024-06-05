@@ -77,6 +77,7 @@ class SAMWidget(QWidget):
 
         self._sam_box_layer = self._viewer.add_shapes(name="SAM-Box", edge_color="red", edge_width=2, face_color="transparent")
         self._sam_box_layer.mouse_drag_callbacks.append(self._on_sam_box_created)
+        self._sam_box_layer.bind_key("R", self._reject_all_boxes)
         self.lock_controls(self._sam_box_layer)
         self._sam_positive_point_layer = self._viewer.add_points(name="SAM-Positive", face_color="green", size=10)
         self._sam_negative_point_layer = self._viewer.add_points(name="SAM-Negative", face_color="red", size=10)
@@ -157,13 +158,13 @@ class SAMWidget(QWidget):
         self.sam_predictor = SamPredictor(self._sam_model)
         print("model loaded")
         if self._image_layer_selection.currentText() != "":
-            self._on_image_layer_changed(None)
+            self._on_image_layer_changed(True)
 
-    def _on_image_layer_changed(self, index):
+    def _on_image_layer_changed(self, set_image=False):
         print("image_layer_changed")
         if self.sam_predictor is not None:
             if (self._image_layer_selection.currentText() != "")&(self._image_layer_selection.currentText() in self._viewer.layers):
-                if self._current_target_image_name != self._image_layer_selection.currentText():
+                if (self._current_target_image_name != self._image_layer_selection.currentText()) or (set_image==True):
                     self._current_target_image_name = self._image_layer_selection.currentText()
                     self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
                     if "stack" in self._image_type:
@@ -199,6 +200,9 @@ class SAMWidget(QWidget):
             self._create_input_point()
             self._predict()
             self._sam_box_layer.data = []
+
+    def _reject_all_boxes(self, layer):
+        self._sam_box_layer.data = []
 
     def _on_sam_point_changed(self):
         if (len(self._sam_positive_point_layer.data) != 0) or (self._input_box is not None):
