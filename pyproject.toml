@@ -7,7 +7,7 @@ name = "napari-SAM4IS"
 version = "0.0.9"
 description = "Create annotations for instance segmentation using Segment Anything models"
 readme = "README.md"
-license = "Apache-2.0"
+license = { text = "Apache-2.0" }
 authors = [
     {name = "Hiroki Kawai", email = "h.kawai888@gmail.com"},
 ]
