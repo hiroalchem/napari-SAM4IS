@@ -26,7 +26,7 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-### Basic Installation
+### Step 1: Install napari-SAM4IS
 
 You can install `napari-SAM4IS` via [pip]:
 
@@ -34,18 +34,12 @@ You can install `napari-SAM4IS` via [pip]:
 pip install napari-SAM4IS
 ```
 
-### SAM Model Installation
+### Step 2: Install Segment Anything Model
 
-To use the Segment Anything Model functionality, you need to install SAM separately:
+**IMPORTANT**: You must install the Segment Anything Model separately to use this plugin:
 
 ```bash
 pip install git+https://github.com/facebookresearch/segment-anything.git
-```
-
-Or you can install both at once using the optional dependency:
-
-```bash
-pip install "napari-SAM4IS[sam]"
 ```
 
 ### Development Installation
