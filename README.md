@@ -26,27 +26,31 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-To use this plugin, you'll need to install the [napari](https://napari.org/stable/tutorials/fundamentals/installation.html) multi-dimensional image viewer and the [Segment Anything Model (SAM)](https://github.com/facebookresearch/segment-anything) library.
+### Basic Installation
 
-### napari Installation
+You can install `napari-SAM4IS` via [pip]:
 
-You can install napari using pip:
-
-```
-pip install "napari[all]"
+```bash
+pip install napari-SAM4IS
 ```
 
-Alternatively, you can install napari and all of its dependencies with conda:
+### SAM Model Installation
 
+To use the Segment Anything Model functionality, you need to install SAM separately:
+
+```bash
+pip install git+https://github.com/facebookresearch/segment-anything.git
 ```
-conda install -c conda-forge napari
+
+Or you can install both at once using the optional dependency:
+
+```bash
+pip install "napari-SAM4IS[sam]"
 ```
 
-For more detailed instructions, please refer to the [napari installation guide](https://napari.org/stable/tutorials/fundamentals/installation.html).
+### Development Installation
 
-### SAM Installation
-
-You can install SAM from the [official GitHub repository](https://github.com/facebookresearch/segment-anything) using pip:
+To install the latest development version:
 
 ```
 pip install git+https://github.com/facebookresearch/segment-anything.git
