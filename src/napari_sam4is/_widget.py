@@ -1,10 +1,16 @@
 import json
 import os
+import base64
+import io
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import napari
 import numpy as np
 import torch
-from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel, QButtonGroup, QRadioButton, QCheckBox
+from PIL import Image
+from qtpy.QtWidgets import QVBoxLayout, QPushButton, QWidget, QComboBox, QLabel, QButtonGroup, QRadioButton, QCheckBox, QLineEdit, QHBoxLayout, QGroupBox
 from segment_anything import sam_model_registry, SamPredictor
 
 from ._utils import load_model, preprocess, label2polygon, create_json, check_image_type, find_first_missing
@@ -27,6 +33,42 @@ class SAMWidget(QWidget):
         #self._corner = None
 
         self.vbox = QVBoxLayout()
+        
+        # API settings group
+        self._api_group = QGroupBox("API Settings")
+        self._api_layout = QVBoxLayout()
+        
+        self._use_api_checkbox = QCheckBox("Use API")
+        self._use_api_checkbox.toggled.connect(self._on_api_checkbox_toggled)
+        self._api_layout.addWidget(self._use_api_checkbox)
+        
+        # API URL input
+        self._api_url_layout = QHBoxLayout()
+        self._api_url_layout.addWidget(QLabel("API URL:"))
+        self._api_url_input = QLineEdit()
+        self._api_url_input.setPlaceholderText("https://your-api-endpoint.com")
+        self._api_url_layout.addWidget(self._api_url_input)
+        self._api_layout.addLayout(self._api_url_layout)
+        
+        # API Key input
+        self._api_key_layout = QHBoxLayout()
+        self._api_key_layout.addWidget(QLabel("API Key:"))
+        self._api_key_input = QLineEdit()
+        self._api_key_input.setPlaceholderText("Enter your API key")
+        self._api_key_input.setEchoMode(QLineEdit.Password)
+        self._api_key_layout.addWidget(self._api_key_input)
+        self._api_layout.addLayout(self._api_key_layout)
+        
+        self._api_group.setLayout(self._api_layout)
+        self.vbox.addWidget(self._api_group)
+        
+        # Initially hidden
+        self._api_url_input.setVisible(False)
+        self._api_key_input.setVisible(False)
+        self._api_url_layout.itemAt(0).widget().setVisible(False)
+        self._api_key_layout.itemAt(0).widget().setVisible(False)
+        
+        # Model selection
         self._model_selection = QComboBox()
         self._model_selection.addItems(list(sam_model_registry.keys()))
         self.vbox.addWidget(self._model_selection)
@@ -77,6 +119,7 @@ class SAMWidget(QWidget):
 
         self._sam_box_layer = self._viewer.add_shapes(name="SAM-Box", edge_color="red", edge_width=2, face_color="transparent")
         self._sam_box_layer.mouse_drag_callbacks.append(self._on_sam_box_created)
+        self._sam_box_layer.bind_key("R", self._reject_all_boxes)
         self.lock_controls(self._sam_box_layer)
         self._sam_positive_point_layer = self._viewer.add_points(name="SAM-Positive", face_color="green", size=10)
         self._sam_negative_point_layer = self._viewer.add_points(name="SAM-Negative", face_color="red", size=10)
@@ -121,6 +164,18 @@ class SAMWidget(QWidget):
         self._on_layer_list_changed(None)
         self._radio_btn_shape.setChecked(True)
 
+    def _on_api_checkbox_toggled(self):
+        """Handle API checkbox state changes"""
+        is_checked = self._use_api_checkbox.isChecked()
+        self._api_url_input.setVisible(is_checked)
+        self._api_key_input.setVisible(is_checked)
+        self._api_url_layout.itemAt(0).widget().setVisible(is_checked)
+        self._api_key_layout.itemAt(0).widget().setVisible(is_checked)
+        
+        # Toggle local model enable/disable
+        self._model_selection.setEnabled(not is_checked)
+        self._model_load_btn.setEnabled(not is_checked)
+
     def _on_layer_list_changed(self, event):
         if event is not None:
             print(event.value)
@@ -151,19 +206,36 @@ class SAMWidget(QWidget):
                 self.check_box.setStyleSheet("text-decoration: none")
 
     def _load_model(self):
+        if self._use_api_checkbox.isChecked():
+            print("Local model loading is not required in API mode")
+            return
+            
         model_name = self._model_selection.currentText()
         self._sam_model = load_model(model_name)
         self._sam_model.to(device=self.device)
         self.sam_predictor = SamPredictor(self._sam_model)
         print("model loaded")
         if self._image_layer_selection.currentText() != "":
-            self._on_image_layer_changed(None)
+            self._on_image_layer_changed(True)
 
-    def _on_image_layer_changed(self, index):
+    def _on_image_layer_changed(self, set_image=False):
         print("image_layer_changed")
+        
+        # Skip local setup in API mode
+        if self._use_api_checkbox.isChecked():
+            if (self._image_layer_selection.currentText() != "")&(self._image_layer_selection.currentText() in self._viewer.layers):
+                self._current_target_image_name = self._image_layer_selection.currentText()
+                self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
+                if "stack" in self._image_type:
+                    self._current_slice, _, _ = self._viewer.dims.current_step
+                else:
+                    self._current_slice = None
+                print('Image selected for API mode')
+            return
+        
         if self.sam_predictor is not None:
             if (self._image_layer_selection.currentText() != "")&(self._image_layer_selection.currentText() in self._viewer.layers):
-                if self._current_target_image_name != self._image_layer_selection.currentText():
+                if (self._current_target_image_name != self._image_layer_selection.currentText()) or (set_image==True):
                     self._current_target_image_name = self._image_layer_selection.currentText()
                     self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
                     if "stack" in self._image_type:
@@ -171,7 +243,7 @@ class SAMWidget(QWidget):
                     else:
                         self._current_slice = None
                     self.sam_predictor.set_image(preprocess(self._viewer.layers[self._image_layer_selection.currentText()].data, self._image_type, self._current_slice))
-                    print('set image')
+                    print('Set image')
                     # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
 
     def _on_sam_box_created(self, layer, event):
@@ -200,6 +272,9 @@ class SAMWidget(QWidget):
             self._predict()
             self._sam_box_layer.data = []
 
+    def _reject_all_boxes(self, layer):
+        self._sam_box_layer.data = []
+
     def _on_sam_point_changed(self):
         if (len(self._sam_positive_point_layer.data) != 0) or (self._input_box is not None):
             if "stack" in self._image_type:
@@ -213,6 +288,12 @@ class SAMWidget(QWidget):
             self._predict()
 
     def _predict(self):
+        if self._use_api_checkbox.isChecked():
+            self._predict_api()
+        else:
+            self._predict_local()
+    
+    def _predict_local(self):
         if self.sam_predictor is not None:
             masks, _, _ = self.sam_predictor.predict(
                 point_coords=self._input_point,
@@ -222,6 +303,110 @@ class SAMWidget(QWidget):
             )
             self._labels_layer.data = masks[0] * 1
         self._viewer.layers.selection.active = self._labels_layer
+    
+    def _predict_api(self):
+        """Execute prediction using API"""
+        if self._input_box is None:
+            print("Error: Bounding box is not set")
+            return
+            
+        api_url = self._api_url_input.text().strip()
+        api_key = self._api_key_input.text().strip()
+        
+        if not api_url or not api_key:
+            print("Error: Please enter API URL and API Key")
+            return
+            
+        try:
+            # Get current image
+            image_layer = self._viewer.layers[self._image_layer_selection.currentText()]
+            if "stack" in self._image_type:
+                current_slice = self._viewer.dims.current_step[0]
+                image_data = image_layer.data[current_slice]
+            else:
+                image_data = image_layer.data
+                
+            # Convert to PIL Image and encode as JPEG
+            if image_data.ndim == 2:  # Grayscale
+                pil_image = Image.fromarray(image_data).convert('RGB')
+            else:  # RGB
+                pil_image = Image.fromarray(image_data.astype(np.uint8))
+                
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="JPEG", quality=100)
+            image_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            # Wrap bounding box coordinates in list
+            coords = [self._input_box.tolist()]
+            
+            # Create API request data
+            request_data = {
+                "input": {
+                    "image_data": image_b64,
+                    "coords": coords,
+                    "output_format": "geojson",
+                    "image_format": "jpeg"
+                }
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Create session with retry functionality
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[500, 502, 503, 504, 520]
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("https://", adapter)
+            
+            print("Sending request to API...")
+            response = session.post(api_url, headers=headers, json=request_data, timeout=300)
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'error' in result:
+                print(f"API error: {result['error']}")
+                return
+                
+            # Generate mask from GeoJSON
+            geojson_data = result['output']['geojson']
+            mask = self._geojson_to_mask(geojson_data, image_data.shape)
+            
+            self._labels_layer.data = mask.astype(np.uint8)
+            print("API prediction completed")
+            
+        except Exception as e:
+            print(f"API error: {str(e)}")
+            
+        self._viewer.layers.selection.active = self._labels_layer
+    
+    def _geojson_to_mask(self, geojson_data, image_shape):
+        """Convert GeoJSON data to mask"""  
+        height, width = image_shape[:2]
+        mask = np.zeros((height, width), dtype=np.uint8)
+        
+        for feature in geojson_data['features']:
+            if feature['geometry']['type'] == 'Polygon':
+                coordinates = feature['geometry']['coordinates'][0]
+                coords_array = np.array(coordinates)
+                
+                from matplotlib.path import Path
+                path = Path(coords_array)
+                
+                y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+                points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+                
+                inside = path.contains_points(points)
+                inside_2d = inside.reshape(height, width)
+                
+                mask = np.where(inside_2d, 1, mask)
+        
+        return mask
 
 
     def _create_input_point(self):
