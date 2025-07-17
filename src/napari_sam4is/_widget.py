@@ -427,7 +427,7 @@ class SAMWidget(QWidget):
             if self._shapes_layer_selection.currentText() != "":
                 output_layer = self._viewer.layers[self._shapes_layer_selection.currentText()]
                 if isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
-                    output_layer.add_polygons(label2polygon(self._labels_layer.data), edge_width=6)
+                    output_layer.add_polygons(label2polygon(self._labels_layer.data), edge_width=2)
                     self._viewer.layers.selection.active = self._sam_box_layer
                 else:
                     pass
@@ -442,14 +442,24 @@ class SAMWidget(QWidget):
                             num = find_first_missing(output_layer.data[self._current_slice])
                         else:
                             num = 1
-                        output_layer.data[self._current_slice] = output_layer.data[self._current_slice] | self._labels_layer.data * num
+                        # 既存のラベル（1以上）がある場所は上書きしない
+                        current_data = output_layer.data[self._current_slice]
+                        new_mask = self._labels_layer.data * num
+                        # 既存のラベルが0の場所のみ新しいマスクを適用
+                        mask_to_apply = (current_data == 0) & (new_mask > 0)
+                        output_layer.data[self._current_slice] = current_data + new_mask * mask_to_apply
                         output_layer.refresh()
                     else:
                         if self.check_box.isChecked():
                             num = find_first_missing(output_layer.data)
                         else:
                             num = 1
-                        output_layer.data = output_layer.data | self._labels_layer.data * num
+                        # 既存のラベル（1以上）がある場所は上書きしない
+                        current_data = output_layer.data
+                        new_mask = self._labels_layer.data * num
+                        # 既存のラベルが0の場所のみ新しいマスクを適用
+                        mask_to_apply = (current_data == 0) & (new_mask > 0)
+                        output_layer.data = current_data + new_mask * mask_to_apply
                     self._viewer.layers.selection.active = self._sam_box_layer
                 else:
                     pass

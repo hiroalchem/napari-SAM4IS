@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-SAM4IS"
-version = "0.0.9"
+version = "0.1.0"
 description = "Create annotations for instance segmentation using Segment Anything models"
 readme = "README.md"
 license = { text = "Apache-2.0" }
