@@ -60,9 +60,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install setuptools tox tox-gh-actions
 
-      - name: Install segment_anything from GitHub
-        run: pip install git+https://github.com/facebookresearch/segment-anything.git
-
       # this runs the platform-specific tests declared in tox.ini
       - name: Test with tox
         uses: aganders3/headless-gui@v1
