@@ -33,6 +33,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Wait for apt lock
+        if: runner.os == 'Linux'
+        run: |
+          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for dpkg lock to be released..."
+            sleep 5
+          done
+
       # these libraries enable testing on Qt on linux
       - uses: tlambert03/setup-qt-libs@v1
 
