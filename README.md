@@ -34,6 +34,13 @@ You can install `napari-SAM4IS` via [pip]:
 pip install napari-SAM4IS
 ```
 
+Or via conda
+
+```bash
+conda install -c conda-forge napari-SAM4IS
+```
+
+
 ### Step 2: Install Segment Anything Model
 
 **IMPORTANT**: You must install the Segment Anything Model separately to use this plugin:
@@ -65,6 +72,11 @@ For more detailed instructions, please refer to the [SAM installation guide](htt
 You can install `napari-SAM4IS` via [pip]:
 
     pip install napari-SAM4IS
+
+
+Or via conda
+
+    conda install -c conda-forge napari-SAM4IS
 
 
 
