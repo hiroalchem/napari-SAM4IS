@@ -214,7 +214,10 @@ class SAMWidget(QWidget):
                 self._connect_to_layer_name_event(event.value)
             
             self._refresh_layer_selections()
-            [self._viewer.layers.move(i, 0) for i, layer in enumerate(self._viewer.layers) if isinstance(layer, napari.layers.image.image.Image)]
+            # Move image layers to front
+            for i, layer in enumerate(self._viewer.layers):
+                if isinstance(layer, napari.layers.image.image.Image):
+                    self._viewer.layers.move(i, 0)
             if isinstance(event.value, napari.layers.image.image.Image):
                self._on_image_layer_changed(None)
         else:
@@ -331,11 +334,11 @@ class SAMWidget(QWidget):
                 if image_layer is not None:
                     self._current_target_image_name = self._image_layer_selection.currentText()
                     self._image_type = check_image_type(self._viewer, self._image_layer_selection.currentText())
-                if "stack" in self._image_type:
-                    self._current_slice, _, _ = self._viewer.dims.current_step
-                else:
-                    self._current_slice = None
-                print('Image selected for API mode')
+                    if "stack" in self._image_type:
+                        self._current_slice, _, _ = self._viewer.dims.current_step
+                    else:
+                        self._current_slice = None
+                    print('Image selected for API mode')
             return
 
         if self.sam_predictor is not None:
