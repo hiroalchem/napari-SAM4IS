@@ -84,9 +84,7 @@ def check_image_type(viewer, layer_name):
         return "stacked gray images with channel"
     elif (len(image.shape) == 4)&(image.shape[-1] == 3): # maybe stacked RGB images
         return "stacked RGB images"
-    elif (len(image.shape) == 4)&(image.shape[-1] == 2):
-        return "Not supported"
-    elif (len(image.shape) == 4)&(image.shape[-1] > 4):
+    elif (len(image.shape) == 4)&(image.shape[-1] == 2) or (len(image.shape) == 4)&(image.shape[-1] > 4):
         return "Not supported"
     elif (len(image.shape) == 3)&(image.shape[-1] == 3):
         return "RGB"
