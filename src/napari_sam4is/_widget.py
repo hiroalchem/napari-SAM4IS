@@ -280,8 +280,7 @@ class SAMWidget(QWidget):
                 self._shapes_layer_selection.clear()
                 shape_layers = [layer.name for layer in self._viewer.layers
                               if (isinstance(layer, napari.layers.shapes.shapes.Shapes)) and
-                                 (layer.name != self._sam_box_layer.name) and
-                                 (layer.name != self._accepted_layer.name)]
+                                 (layer.name != self._sam_box_layer.name)]
                 self._shapes_layer_selection.addItems(shape_layers)
 
                 # Restore selection if layer still exists
