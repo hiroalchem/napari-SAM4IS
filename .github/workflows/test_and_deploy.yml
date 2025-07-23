@@ -93,7 +93,7 @@ jobs:
         run: twine check dist/*
       
       - name: Upload build artifacts
-        if: contains(github.ref, 'tags')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: built-packages
@@ -102,7 +102,7 @@ jobs:
   create-release:
     needs: [test, build]
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'tags')
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     
@@ -139,7 +139,7 @@ jobs:
           # Save changelog to output
           {
             echo "changelog<<EOF"
-            echo "## Changes in ${{ steps.tag.outputs.tag }}"
+            echo "## Changes in ${GITHUB_REF#refs/tags/}"
             echo ""
             echo "$CHANGELOG"
             echo ""
@@ -160,8 +160,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
-            --title "Release ${{ steps.tag.outputs.tag }}" \
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
             --notes "${{ steps.changelog.outputs.changelog }}" \
             dist/*
 
@@ -171,7 +172,7 @@ jobs:
     # github secrets (see readme for details)
     needs: [test, build, create-release]
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'tags')
+    if: startsWith(github.ref, 'refs/tags/')
     environment: pypi
     permissions:
       id-token: write  # OIDC for PyPI trusted publishing
