@@ -34,32 +34,31 @@ You can install `napari-SAM4IS` via [pip]:
 pip install napari-SAM4IS
 ```
 
-Or via conda
+Or via conda:
 
 ```bash
 conda install -c conda-forge napari-SAM4IS
 ```
 
+To install the latest development version:
 
-### Step 2: Install Segment Anything Model
+```bash
+pip install git+https://github.com/hiroalchem/napari-SAM4IS.git
+```
 
-**IMPORTANT**: You must install the Segment Anything Model separately to use this plugin:
+### Step 2: Install Segment Anything Model (Optional - for local model usage)
+
+**Note**: Installing the Segment Anything Model is only required if you plan to use local models. If you're using the API mode, you can skip this step.
+
+To use local models, install SAM:
 
 ```bash
 pip install git+https://github.com/facebookresearch/segment-anything.git
 ```
 
-### Development Installation
-
-To install the latest development version:
-
-```
-pip install git+https://github.com/facebookresearch/segment-anything.git
-```
-
 Or you can install from source by cloning the repository:
 
-```
+```bash
 git clone https://github.com/facebookresearch/segment-anything.git
 cd segment-anything
 pip install -e .
@@ -67,28 +66,13 @@ pip install -e .
 
 For more detailed instructions, please refer to the [SAM installation guide](https://github.com/facebookresearch/segment-anything#installation).
 
-### napari-SAM4IS Installation
-
-You can install `napari-SAM4IS` via [pip]:
-
-    pip install napari-SAM4IS
-
-
-Or via conda
-
-    conda install -c conda-forge napari-SAM4IS
-
-
-
-To install latest development version :
-
-    pip install git+https://github.com/hiroalchem/napari-SAM4IS.git
-
 ## Usage
 ### Preparation
 1. Open an image in napari and launch the plugin. (Opening an image after launching the plugin is also possible.)
 2. Upon launching the plugin, three layers will be automatically created: SAM-Box, SAM-Predict, and Accepted. The usage of these layers will be explained later.
-3. In the widget that appears, select the model you want to use and click the load button. (The default option is recommended.)
+3. Choose between local model or API mode:
+   - **Local Model Mode**: Select the model you want to use and click the load button. (The default option is recommended.)
+   - **API Mode**: Check the "Use API" checkbox, then enter your API URL and API Key. No model loading is required.
 4. Next, select the image layer you want to annotate.
 5. Then, select whether you want to do instance segmentation or semantic segmentation. (Note that for 3D images, semantic segmentation should be chosen in the current version.)
 6. Finally, select the output layer as "shapes" for instance segmentation or "labels" for semantic segmentation. (For instance segmentation, the "Accept" layer can also be used.)
