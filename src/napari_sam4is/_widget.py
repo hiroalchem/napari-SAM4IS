@@ -95,6 +95,13 @@ class SAMWidget(QWidget):
         self._api_url_layout.itemAt(0).widget().setVisible(False)
         self._api_key_layout.itemAt(0).widget().setVisible(False)
 
+        # Manual Mode
+        self._manual_mode_checkbox = QCheckBox("Manual Mode")
+        self._manual_mode_checkbox.toggled.connect(
+            self._on_manual_mode_toggled
+        )
+        self.vbox.addWidget(self._manual_mode_checkbox)
+
         # Model selection
         self._model_selection = QComboBox()
         self._model_selection.addItems(list(sam_model_registry.keys()))
@@ -303,6 +310,42 @@ class SAMWidget(QWidget):
         # Toggle local model enable/disable
         self._model_selection.setEnabled(not is_checked)
         self._model_load_btn.setEnabled(not is_checked)
+
+    def _on_manual_mode_toggled(self, is_checked):
+        """Handle Manual Mode checkbox state changes."""
+        if is_checked:
+            # Disable SAM-related controls
+            self._api_group.setEnabled(False)
+            self._model_selection.setEnabled(False)
+            self._model_load_btn.setEnabled(False)
+
+            # Hide SAM layers
+            self._sam_box_layer.visible = False
+            self._sam_positive_point_layer.visible = False
+            self._sam_negative_point_layer.visible = False
+
+            # Clear and set SAM-Predict to paint mode
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+            self._labels_layer.selected_label = 1
+            self._labels_layer.brush_size = 10
+            self._labels_layer.mode = "paint"
+            self._viewer.layers.selection.active = self._labels_layer
+        else:
+            # Re-enable SAM-related controls
+            self._api_group.setEnabled(True)
+            is_api = self._use_api_checkbox.isChecked()
+            self._model_selection.setEnabled(not is_api)
+            self._model_load_btn.setEnabled(not is_api)
+
+            # Show SAM layers
+            self._sam_box_layer.visible = True
+            self._sam_positive_point_layer.visible = True
+            self._sam_negative_point_layer.visible = True
+
+            # Reset SAM-Predict
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+            self._labels_layer.mode = "pan_zoom"
+            self._viewer.layers.selection.active = self._sam_box_layer
 
     def _on_layer_list_changed(self, event):
         if event is not None:
@@ -711,6 +754,8 @@ class SAMWidget(QWidget):
                     # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
 
     def _on_sam_box_created(self, layer, event):
+        if self._manual_mode_checkbox.isChecked():
+            return
         # mouse click
         yield
         # mouse move
@@ -996,12 +1041,22 @@ class SAMWidget(QWidget):
         self._input_point = None
         self._point_label = None
 
+        # In manual mode, return to paint mode on SAM-Predict
+        if self._manual_mode_checkbox.isChecked():
+            self._viewer.layers.selection.active = self._labels_layer
+            self._labels_layer.mode = "paint"
+
     def _reject_mask(self, layer):
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
-        self._viewer.layers.selection.active = self._sam_box_layer
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
+
+        if self._manual_mode_checkbox.isChecked():
+            self._viewer.layers.selection.active = self._labels_layer
+            self._labels_layer.mode = "paint"
+        else:
+            self._viewer.layers.selection.active = self._sam_box_layer
 
     def _save(self):
         if self._shapes_layer_selection.currentText() != "":
