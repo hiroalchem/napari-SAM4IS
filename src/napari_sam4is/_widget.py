@@ -325,8 +325,7 @@ class SAMWidget(QWidget):
             self._sam_negative_point_layer.visible = False
 
             # Clear and set SAM-Predict to paint mode
-            self._labels_layer.data[:] = 0
-            self._labels_layer.refresh()
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
             self._labels_layer.selected_label = 1
             self._labels_layer.brush_size = 10
             self._labels_layer.mode = "paint"
@@ -344,8 +343,7 @@ class SAMWidget(QWidget):
             self._sam_negative_point_layer.visible = True
 
             # Reset SAM-Predict
-            self._labels_layer.data[:] = 0
-            self._labels_layer.refresh()
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
             self._labels_layer.mode = "pan_zoom"
             self._viewer.layers.selection.active = self._sam_box_layer
 
@@ -1040,8 +1038,7 @@ class SAMWidget(QWidget):
                     return
                 else:
                     pass
-        self._labels_layer.data[:] = 0
-        self._labels_layer.refresh()
+        self._labels_layer.data = np.zeros_like(self._labels_layer.data)
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
@@ -1054,8 +1051,7 @@ class SAMWidget(QWidget):
             self._labels_layer.mode = "paint"
 
     def _reject_mask(self, layer):
-        self._labels_layer.data[:] = 0
-        self._labels_layer.refresh()
+        self._labels_layer.data = np.zeros_like(self._labels_layer.data)
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
