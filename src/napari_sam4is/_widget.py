@@ -325,7 +325,8 @@ class SAMWidget(QWidget):
             self._sam_negative_point_layer.visible = False
 
             # Clear and set SAM-Predict to paint mode
-            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+            self._labels_layer.data[:] = 0
+            self._labels_layer.refresh()
             self._labels_layer.selected_label = 1
             self._labels_layer.brush_size = 10
             self._labels_layer.mode = "paint"
@@ -343,7 +344,8 @@ class SAMWidget(QWidget):
             self._sam_negative_point_layer.visible = True
 
             # Reset SAM-Predict
-            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+            self._labels_layer.data[:] = 0
+            self._labels_layer.refresh()
             self._labels_layer.mode = "pan_zoom"
             self._viewer.layers.selection.active = self._sam_box_layer
 
@@ -959,6 +961,10 @@ class SAMWidget(QWidget):
             return None
 
     def _accept_mask(self, layer):
+        # Guard: skip if mask is empty (no painted pixels)
+        if not np.any(self._labels_layer.data):
+            print("Nothing to accept (empty mask)")
+            return
         selected_class = self._get_selected_class()
         button_id = self._radio_btn_group.checkedId()
         if button_id == 0:
@@ -1034,7 +1040,8 @@ class SAMWidget(QWidget):
                     return
                 else:
                     pass
-        self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+        self._labels_layer.data[:] = 0
+        self._labels_layer.refresh()
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
@@ -1047,7 +1054,8 @@ class SAMWidget(QWidget):
             self._labels_layer.mode = "paint"
 
     def _reject_mask(self, layer):
-        self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+        self._labels_layer.data[:] = 0
+        self._labels_layer.refresh()
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
