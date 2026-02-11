@@ -1123,6 +1123,8 @@ class SAMWidget(QWidget):
             pass
 
     def lock_controls(self, layer, locked=True):
+        import warnings
+
         widget_list = [
             "ellipse_button",
             "line_button",
@@ -1136,9 +1138,18 @@ class SAMWidget(QWidget):
             "direct_button",
             "delete_button",
         ]
-        qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
-        for wdg in widget_list:
-            getattr(qctrl, wdg).setEnabled(not locked)
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Public access to Window.qt_viewer",
+                    category=FutureWarning,
+                )
+                qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
+            for wdg in widget_list:
+                getattr(qctrl, wdg).setEnabled(not locked)
+        except (AttributeError, KeyError):
+            pass
 
     def print_corner_value(self):
         print(self._viewer.dims.current_step)
