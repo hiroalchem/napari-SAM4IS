@@ -84,3 +84,4 @@ venv/
 **/_version.py
 
 CLAUDE.md
+.claude/

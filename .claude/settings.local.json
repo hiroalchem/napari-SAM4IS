@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(curl:*)",
-      "Bash(/Users/hiroki/.pyenv/versions/miniforge3-4.10.1-5/envs/napari-sam/bin/python -m pytest src/napari_sam4is/_tests/test_widget.py -v --color=yes --no-header)"
-    ]
-  }
-}
