@@ -22,6 +22,7 @@ if not hasattr(Selection, "replace_selection"):
 
     Selection.replace_selection = _replace_selection
 
+
 def _patched_selected_data_setter(
     self, selected_data: Collection[int]
 ) -> None:
