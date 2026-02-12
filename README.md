@@ -26,6 +26,8 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
+**Requirements**: Python 3.10-3.13
+
 ### Step 1: Install napari-SAM4IS
 
 You can install `napari-SAM4IS` via [pip]:
