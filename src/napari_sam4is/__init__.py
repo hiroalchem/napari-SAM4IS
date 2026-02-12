@@ -7,7 +7,7 @@
 # Note: This patch is applied conditionally based on the presence of the
 # replace_selection method, making it compatible with both affected versions
 # (e.g., 0.6.6) and future versions where the bug may be fixed.
-from typing import Collection
+from collections.abc import Collection
 
 from napari.layers.shapes.shapes import Shapes
 from napari.utils.events.containers import Selection
@@ -21,13 +21,6 @@ if not hasattr(Selection, "replace_selection"):
         self.update(items)
 
     Selection.replace_selection = _replace_selection
-
-# Patch Shapes.selected_data setter to work even if replace_selection missing
-# Note: We save the original setter for reference but implement the full logic
-# rather than wrapping it, because the original setter calls replace_selection
-# which may not exist. Copying the implementation ensures compatibility.
-_original_selected_data_setter = Shapes.selected_data.fset
-
 
 def _patched_selected_data_setter(
     self, selected_data: Collection[int]
@@ -49,7 +42,6 @@ def _patched_selected_data_setter(
     # Call the rest of the original setter logic
     # Import here to avoid circular dependencies
     import numpy as np
-
     from napari.layers.shapes.shapes import _unique_element
 
     self._selected_box = self.interaction_box(self._selected_data)
@@ -99,6 +91,13 @@ Shapes.selected_data = property(
     Shapes.selected_data.fget, _patched_selected_data_setter
 )
 
-from ._widget import SAMWidget
-
 __all__ = ("SAMWidget",)
+
+
+def __getattr__(name):
+    if name == "SAMWidget":
+        from ._widget import SAMWidget
+
+        globals()["SAMWidget"] = SAMWidget
+        return SAMWidget
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

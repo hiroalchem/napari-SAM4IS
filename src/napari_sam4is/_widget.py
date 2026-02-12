@@ -29,7 +29,6 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 from requests.adapters import HTTPAdapter
-from segment_anything import SamPredictor, sam_model_registry
 from urllib3.util.retry import Retry
 
 from ._utils import (
@@ -37,6 +36,7 @@ from ._utils import (
     create_json,
     find_first_missing,
     find_missing_class_number,
+    get_available_model_names,
     label2polygon,
     load_model,
     preprocess,
@@ -105,7 +105,7 @@ class SAMWidget(QWidget):
 
         # Model selection
         self._model_selection = QComboBox()
-        self._model_selection.addItems(list(sam_model_registry.keys()))
+        self._model_selection.addItems(get_available_model_names())
         self.vbox.addWidget(self._model_selection)
         self._model_load_btn = QPushButton("load model")
         self._model_load_btn.clicked.connect(self._load_model)
@@ -430,16 +430,6 @@ class SAMWidget(QWidget):
         """Refresh all layer selection ComboBoxes with current layer names"""
         # Store current selections
         current_image = self._image_layer_selection.currentText()
-        current_shapes = (
-            self._shapes_layer_selection.currentText()
-            if self._shapes_layer_selection
-            else ""
-        )
-        current_labels = (
-            self._labels_layer_selection.currentText()
-            if self._labels_layer_selection
-            else ""
-        )
 
         # Update image layer selection
         self._image_layer_selection.clear()
@@ -706,6 +696,11 @@ class SAMWidget(QWidget):
         if self._use_api_checkbox.isChecked():
             print("Local model loading is not required in API mode")
             return
+        try:
+            from segment_anything import SamPredictor
+        except (ImportError, ModuleNotFoundError) as exc:
+            print(f"Failed to import segment_anything: {exc}")
+            return
 
         model_name = self._model_selection.currentText()
         self._sam_model = load_model(model_name)
@@ -908,7 +903,12 @@ class SAMWidget(QWidget):
             self._labels_layer.data = mask.astype(np.uint8)
             print("API prediction completed")
 
-        except Exception as e:
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as e:
             print(f"API error: {str(e)}")
 
         self._viewer.layers.selection.active = self._labels_layer

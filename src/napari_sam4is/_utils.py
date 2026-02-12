@@ -2,13 +2,30 @@ import os
 import urllib
 
 import numpy as np
-from segment_anything import sam_model_registry
 from skimage.color import gray2rgb, rgba2rgb
 from skimage.draw import polygon2mask
 from skimage.measure import find_contours
 
+MODEL_URLS = {
+    "default": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+    "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+    "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+    "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+}
 
-def load_model(model_name: str = "default") -> sam_model_registry:
+
+def get_available_model_names():
+    """Return model names without requiring segment_anything at import time."""
+    try:
+        from segment_anything import sam_model_registry
+    except (ImportError, ModuleNotFoundError):
+        return list(MODEL_URLS.keys())
+
+    available = [name for name in MODEL_URLS if name in sam_model_registry]
+    return available or list(MODEL_URLS.keys())
+
+
+def load_model(model_name: str = "default"):
     """Load model
 
     Args:
@@ -16,13 +33,17 @@ def load_model(model_name: str = "default") -> sam_model_registry:
 
     :return: model
     """
-    model_urls = dict(
-        default="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        vit_h="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        vit_l="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-        vit_b="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-    )
-    model_url = model_urls[model_name]
+    try:
+        from segment_anything import sam_model_registry
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ImportError(
+            "segment_anything is required to load local SAM models."
+        ) from exc
+
+    if model_name not in MODEL_URLS:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
+    model_url = MODEL_URLS[model_name]
     model_path = os.path.join(
         os.path.expanduser("~"),
         ".cache",

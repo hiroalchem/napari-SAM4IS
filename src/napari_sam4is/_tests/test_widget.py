@@ -23,7 +23,7 @@ def test_sam_widget_creation(make_napari_viewer):
 
 def test_sam_widget_basic_functionality(make_napari_viewer):
     viewer = make_napari_viewer()
-    layer = viewer.add_image(np.random.random((100, 100)))
+    viewer.add_image(np.random.random((100, 100)))
 
     # create the SAM widget
     widget = SAMWidget(viewer)
