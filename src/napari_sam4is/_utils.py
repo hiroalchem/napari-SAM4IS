@@ -15,14 +15,8 @@ MODEL_URLS = {
 
 
 def get_available_model_names():
-    """Return model names without requiring segment_anything at import time."""
-    try:
-        from segment_anything import sam_model_registry
-    except (ImportError, ModuleNotFoundError):
-        return list(MODEL_URLS.keys())
-
-    available = [name for name in MODEL_URLS if name in sam_model_registry]
-    return available or list(MODEL_URLS.keys())
+    """Return model names without importing heavy dependencies."""
+    return list(MODEL_URLS.keys())
 
 
 def load_model(model_name: str = "default"):
@@ -170,12 +164,12 @@ def create_json(image, name, data, categories=None, category_ids=None):
             "image_id": 0,
             "category_id": cat_id,
             "segmentation": [polygon.flatten().tolist()[::-1]],
-            "area": np.count_nonzero(polygon2mask(image.shape, polygon)),
+            "area": int(np.count_nonzero(polygon2mask(image.shape, polygon))),
             "bbox": [
-                min(polygon[:, 1]),
-                min(polygon[:, 0]),
-                max(polygon[:, 1]) - min(polygon[:, 1]),
-                max(polygon[:, 0]) - min(polygon[:, 0]),
+                float(min(polygon[:, 1])),
+                float(min(polygon[:, 0])),
+                float(max(polygon[:, 1]) - min(polygon[:, 1])),
+                float(max(polygon[:, 0]) - min(polygon[:, 0])),
             ],
             "iscrowd": 0,
         }
