@@ -3,12 +3,16 @@
 # but Selection class is missing this method. We patch both:
 # 1. Add replace_selection to Selection class
 # 2. Replace Shapes.selected_data setter to handle missing method
+#
+# Note: This patch is applied conditionally based on the presence of the
+# replace_selection method, making it compatible with both affected versions
+# (e.g., 0.6.6) and future versions where the bug may be fixed.
 from typing import Collection
 
 from napari.layers.shapes.shapes import Shapes
 from napari.utils.events.containers import Selection
 
-# Add replace_selection to Selection class
+# Add replace_selection to Selection class if missing (version guard)
 if not hasattr(Selection, "replace_selection"):
 
     def _replace_selection(self, items):
@@ -19,13 +23,22 @@ if not hasattr(Selection, "replace_selection"):
     Selection.replace_selection = _replace_selection
 
 # Patch Shapes.selected_data setter to work even if replace_selection missing
+# Note: We save the original setter for reference but implement the full logic
+# rather than wrapping it, because the original setter calls replace_selection
+# which may not exist. Copying the implementation ensures compatibility.
 _original_selected_data_setter = Shapes.selected_data.fset
 
 
 def _patched_selected_data_setter(
     self, selected_data: Collection[int]
 ) -> None:
-    """Patched version that handles missing replace_selection gracefully."""
+    """Patched version that handles missing replace_selection gracefully.
+
+    This reimplements napari's Shapes.selected_data setter logic with a
+    fallback for missing Selection.replace_selection method. We copy the
+    entire setter implementation rather than wrapping the original because
+    the original would fail before we could intercept the error.
+    """
     # Use replace_selection if available, otherwise fall back
     if hasattr(self._selected_data, "replace_selection"):
         self._selected_data.replace_selection(selected_data)

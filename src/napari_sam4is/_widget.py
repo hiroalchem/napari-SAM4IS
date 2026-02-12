@@ -119,7 +119,9 @@ class SAMWidget(QWidget):
                 if isinstance(layer, napari.layers.image.image.Image)
             ]
         )
-        # self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
+        self._image_layer_selection.currentTextChanged.connect(
+            self._on_image_layer_changed
+        )
         self.vbox.addWidget(self._image_layer_selection)
 
         self.vbox.addWidget(QLabel("Output type (3D: labels only)"))
@@ -1146,10 +1148,15 @@ class SAMWidget(QWidget):
                     category=FutureWarning,
                 )
                 qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
-            for wdg in widget_list:
-                getattr(qctrl, wdg).setEnabled(not locked)
         except (AttributeError, KeyError):
-            pass
+            # Controls container not available for this layer
+            return
+
+        # Lock/unlock each control individually to avoid skipping if one is missing
+        for wdg in widget_list:
+            ctrl = getattr(qctrl, wdg, None)
+            if ctrl is not None and hasattr(ctrl, "setEnabled"):
+                ctrl.setEnabled(not locked)
 
     def print_corner_value(self):
         print(self._viewer.dims.current_step)
