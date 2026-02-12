@@ -3,7 +3,7 @@ display_name: napari-SAM4IS
 contributions:
   commands:
     - id: napari-SAM4IS.make_sam_widget
-      python_name: napari_sam4is._widget:SAMWidget
+      python_name: napari_sam4is:SAMWidget
       title: Make SAM Widget
   widgets:
     - command: napari-SAM4IS.make_sam_widget

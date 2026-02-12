@@ -26,6 +26,8 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
+**Requirements**: Python 3.10-3.13
+
 ### Step 1: Install napari-SAM4IS
 
 You can install `napari-SAM4IS` via [pip]:
@@ -77,18 +79,43 @@ For more detailed instructions, please refer to the [SAM installation guide](htt
 5. Then, select whether you want to do instance segmentation or semantic segmentation. (Note that for 3D images, semantic segmentation should be chosen in the current version.)
 6. Finally, select the output layer as "shapes" for instance segmentation or "labels" for semantic segmentation. (For instance segmentation, the "Accept" layer can also be used.)
 
-### Annotation
+### Class Management
+You can define annotation classes to assign to each segmented object.
+
+1. In the **Class Management** section, type a class name and click **Add** (or press Enter) to add a new class.
+2. Click a class in the list to select it. The selected class will be assigned to subsequent annotations.
+3. To reassign a class, select an existing annotation in the output Shapes layer, then click the desired class.
+4. Classes in use cannot be deleted. Remove the associated annotations first.
+5. You can load class definitions from a YAML file (click **Load**). The expected format is:
+   ```yaml
+   names:
+     0: cat
+     1: dog
+     2: bird
+   ```
+6. Class definitions are automatically saved as `class.yaml` alongside the COCO JSON output.
+
+### Annotation with SAM
 1. Select the SAM-Box layer and use the rectangle tool to enclose the object you want to segment.
 2. An automatic segmentation mask will be created and output to the SAM-Predict layer.
 3. If you want to make adjustments, do so in the SAM-Predict layer.
 4. To accept or reject the annotation, press "a" or "r" on the keyboard, respectively.
-5. If you accept the annotation, it will be output as label 1 for semantic segmentation or converted to a polygon and output to the designated layer for instance segmentation.
+5. If you accept the annotation, it will be output as label 1 for semantic segmentation or converted to a polygon and output to the designated layer for instance segmentation. The currently selected class will be assigned to the annotation.
 6. If you reject the annotation, the segmentation mask in the SAM-Predict layer will be discarded.
 7. After accepting or rejecting the annotation, the SAM-Predict layer will automatically reset to blank and return to the SAM-Box layer.
 
+### Manual Annotation (without SAM)
+You can also annotate without using SAM by enabling **Manual Mode**.
+
+1. Check the **Manual Mode** checkbox. SAM-related controls and layers will be hidden.
+2. The SAM-Predict layer switches to paint mode. Use napari's standard Labels tools (paint brush, eraser, fill) from the layer controls panel to draw your annotation.
+3. Adjust brush size using napari's standard Labels controls.
+4. Press **A** to accept or **R** to reject, just like SAM mode.
+5. After accepting, the painted mask is converted to a polygon (instance mode) or merged into the output Labels layer (semantic mode), with the selected class assigned.
+
 ### Saving
 1. If you have output to the labels layer, use napari's standard functionality to save the mask.
-2. If you have output to the shapes layer, you can save the shapes layer using napari's standard functionality, or you can click the "save" button to output a JSON file in COCO format for each image in the folder. (The JSON file will have the same name as the image.)
+2. If you have output to the shapes layer, you can save the shapes layer using napari's standard functionality, or you can click the "save" button to output a JSON file in COCO format for each image in the folder. (The JSON file will have the same name as the image.) Class definitions will also be saved as `class.yaml` in the same directory.
 
 
 

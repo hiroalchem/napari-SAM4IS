@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-SAM4IS"
-version = "0.1.1"
+version = "0.1.2"
 description = "Create annotations for instance segmentation using Segment Anything models"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -19,24 +19,27 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.20.0",
-    "magicgui>=0.7.0",
-    "qtpy>=2.0.0",
-    "torch>=1.12.0",
-    "torchvision>=0.13.0",
-    "scikit-image>=0.19.0",
-    "napari[all]>=0.4.17",
-    "requests>=2.25.0",
-    "urllib3>=1.26.0",
-    "Pillow>=8.0.0",
+    "numpy>=1.23.0,<2.0",
+    "magicgui>=0.8.0,<1.0",
+    "qtpy>=2.4.0,<3.0",
+    "torch>=2.0.0,<3.0",
+    "torchvision>=0.15.0,<1.0",
+    "scikit-image>=0.21.0,<1.0",
+    "napari>=0.4.19,<0.7.0",
+    "PySide6",
+    "requests>=2.31.0,<3.0",
+    "urllib3>=2.0.0,<3.0",
+    "Pillow>=10.0.0,<11.0",
+    "pyyaml>=6.0,<7.0",
+    "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
 ]
 
 [project.urls]
@@ -48,14 +51,13 @@ dependencies = [
 [project.optional-dependencies]
 testing = [
     "tox",
-    "pytest>=6.0",
-    "pytest-cov",
-    "pytest-qt",
-    "pyqt5",
+    "pytest>=7.4.0,<9.0",
+    "pytest-cov>=4.1.0,<6.0",
+    "pytest-qt>=4.2.0,<5.0",
 ]
 dev = [
-    "black>=22.0",
-    "ruff>=0.1.0",
+    "black>=24.0,<25.0",
+    "ruff>=0.8.0,<1.0",
     "pre-commit",
 ]
 
@@ -70,29 +72,10 @@ where = ["src"]
 
 [tool.black]
 line-length = 79
-target-version = ['py38', 'py39', 'py310', 'py311']
+target-version = ['py310', 'py311', 'py312', 'py313']
 
 [tool.ruff]
 line-length = 79
-select = [
-    "E", "F", "W", #flake8
-    "UP", # pyupgrade
-    "I", # isort
-    "BLE", # flake8-blind-exception
-    "B", # flake8-bugbear
-    "A", # flake8-builtins
-    "C4", # flake8-comprehensions
-    "ISC", # flake8-implicit-str-concat
-    "G", # flake8-logging-format
-    "PIE", # flake8-pie
-    "SIM", # flake8-simplify
-]
-ignore = [
-    "E501", # line too long. let black handle this
-    "UP006", "UP007", # type annotation. As using magicgui require runtime type annotation then we disable this.
-    "SIM117", # flake8-simplify - some of merged with statements are not looking great with black, reanble after drop python 3.9
-]
-
 exclude = [
     ".bzr",
     ".direnv",
@@ -115,5 +98,25 @@ exclude = [
     "*_vendor*",
 ]
 
-target-version = "py38"
+target-version = "py310"
 fix = true
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", #flake8
+    "UP", # pyupgrade
+    "I", # isort
+    "BLE", # flake8-blind-exception
+    "B", # flake8-bugbear
+    "A", # flake8-builtins
+    "C4", # flake8-comprehensions
+    "ISC", # flake8-implicit-str-concat
+    "G", # flake8-logging-format
+    "PIE", # flake8-pie
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # line too long. let black handle this
+    "UP006", "UP007", # type annotation. As using magicgui require runtime type annotation then we disable this.
+    "SIM117", # flake8-simplify - some of merged with statements are not looking great with black, reanble after drop python 3.9
+]
