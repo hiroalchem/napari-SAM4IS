@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -95,6 +96,13 @@ class SAMWidget(QWidget):
         self._api_url_layout.itemAt(0).widget().setVisible(False)
         self._api_key_layout.itemAt(0).widget().setVisible(False)
 
+        # Manual Mode
+        self._manual_mode_checkbox = QCheckBox("Manual Mode")
+        self._manual_mode_checkbox.toggled.connect(
+            self._on_manual_mode_toggled
+        )
+        self.vbox.addWidget(self._manual_mode_checkbox)
+
         # Model selection
         self._model_selection = QComboBox()
         self._model_selection.addItems(list(sam_model_registry.keys()))
@@ -111,16 +119,12 @@ class SAMWidget(QWidget):
                 if isinstance(layer, napari.layers.image.image.Image)
             ]
         )
-        # self._image_layer_selection.currentTextChanged.connect(self._on_image_layer_changed)
+        self._image_layer_selection.currentTextChanged.connect(
+            self._on_image_layer_changed
+        )
         self.vbox.addWidget(self._image_layer_selection)
 
-        self.vbox.addWidget(
-            QLabel(
-                "select output layer type \nif you want to use the output\n"
-                "as a mask, select 'labels'.\n"
-                "3D image is currently only\nsupported for 'labels'"
-            )
-        )
+        self.vbox.addWidget(QLabel("Output type (3D: labels only)"))
         self._radio_btn_group = QButtonGroup()
         self._radio_btn_shape = QRadioButton("instance (Shapes layer)")
         self._radio_btn_shape.toggled.connect(self._on_radio_btn_toggled)
@@ -262,7 +266,16 @@ class SAMWidget(QWidget):
             face_color="transparent",
         )
 
-        self.setLayout(self.vbox)
+        # Wrap content in a scroll area
+        scroll_content = QWidget()
+        scroll_content.setLayout(self.vbox)
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setWidgetResizable(True)
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
+        self.setLayout(outer_layout)
         self.show()
 
         if torch.cuda.is_available():
@@ -303,6 +316,63 @@ class SAMWidget(QWidget):
         # Toggle local model enable/disable
         self._model_selection.setEnabled(not is_checked)
         self._model_load_btn.setEnabled(not is_checked)
+
+    def _get_image_shape(self):
+        """Return 2D shape of the currently selected image layer."""
+        layer_name = self._image_layer_selection.currentText()
+        if layer_name and layer_name in self._viewer.layers:
+            image_layer = self._get_layer_by_name_safe(layer_name)
+            if image_layer is not None:
+                img_type = check_image_type(self._viewer, layer_name)
+                if "stack" in img_type:
+                    return image_layer.data.shape[1:3]
+                else:
+                    return image_layer.data.shape[:2]
+        return None
+
+    def _resize_labels_layer(self):
+        """Resize SAM-Predict layer to match selected image."""
+        shape = self._get_image_shape()
+        if shape is not None and shape != self._labels_layer.data.shape:
+            self._labels_layer.data = np.zeros(shape, dtype="uint8")
+        else:
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+
+    def _on_manual_mode_toggled(self, is_checked):
+        """Handle Manual Mode checkbox state changes."""
+        if is_checked:
+            # Disable SAM-related controls
+            self._api_group.setEnabled(False)
+            self._model_selection.setEnabled(False)
+            self._model_load_btn.setEnabled(False)
+
+            # Hide SAM layers
+            self._sam_box_layer.visible = False
+            self._sam_positive_point_layer.visible = False
+            self._sam_negative_point_layer.visible = False
+
+            # Resize and clear SAM-Predict, then set to paint mode
+            self._resize_labels_layer()
+            self._labels_layer.selected_label = 1
+            self._labels_layer.brush_size = 10
+            self._labels_layer.mode = "paint"
+            self._viewer.layers.selection.active = self._labels_layer
+        else:
+            # Re-enable SAM-related controls
+            self._api_group.setEnabled(True)
+            is_api = self._use_api_checkbox.isChecked()
+            self._model_selection.setEnabled(not is_api)
+            self._model_load_btn.setEnabled(not is_api)
+
+            # Show SAM layers
+            self._sam_box_layer.visible = True
+            self._sam_positive_point_layer.visible = True
+            self._sam_negative_point_layer.visible = True
+
+            # Reset SAM-Predict
+            self._resize_labels_layer()
+            self._labels_layer.mode = "pan_zoom"
+            self._viewer.layers.selection.active = self._sam_box_layer
 
     def _on_layer_list_changed(self, event):
         if event is not None:
@@ -648,69 +718,50 @@ class SAMWidget(QWidget):
     def _on_image_layer_changed(self, set_image=False):
         print("image_layer_changed")
 
-        # Skip local setup in API mode
-        if self._use_api_checkbox.isChecked():
-            if (self._image_layer_selection.currentText() != "") & (
-                self._image_layer_selection.currentText()
-                in self._viewer.layers
-            ):
-                image_layer = self._get_layer_by_name_safe(
-                    self._image_layer_selection.currentText()
+        # Update image metadata (needed for all modes)
+        layer_name = self._image_layer_selection.currentText()
+        image_layer = None
+        if layer_name and layer_name in self._viewer.layers:
+            image_layer = self._get_layer_by_name_safe(layer_name)
+            if image_layer is not None:
+                self._current_target_image_name = layer_name
+                self._image_type = check_image_type(self._viewer, layer_name)
+                if "stack" in self._image_type:
+                    self._current_slice, _, _ = self._viewer.dims.current_step
+                else:
+                    self._current_slice = None
+
+        # Update SAM predictor (for local SAM mode, even if in manual mode)
+        # This ensures predictor has correct image when switching back to SAM mode
+        if (
+            self.sam_predictor is not None
+            and image_layer is not None
+            and not self._use_api_checkbox.isChecked()
+        ):
+            self.sam_predictor.set_image(
+                preprocess(
+                    image_layer.data,
+                    self._image_type,
+                    self._current_slice,
                 )
-                if image_layer is not None:
-                    self._current_target_image_name = (
-                        self._image_layer_selection.currentText()
-                    )
-                    self._image_type = check_image_type(
-                        self._viewer, self._image_layer_selection.currentText()
-                    )
-                    if "stack" in self._image_type:
-                        self._current_slice, _, _ = (
-                            self._viewer.dims.current_step
-                        )
-                    else:
-                        self._current_slice = None
-                    print("Image selected for API mode")
+            )
+            print("Set image for SAM predictor")
+
+        # In manual mode, resize SAM-Predict and return
+        if self._manual_mode_checkbox.isChecked():
+            self._resize_labels_layer()
+            self._labels_layer.mode = "paint"
+            self._viewer.layers.selection.active = self._labels_layer
             return
 
-        if self.sam_predictor is not None:
-            if (self._image_layer_selection.currentText() != "") & (
-                self._image_layer_selection.currentText()
-                in self._viewer.layers
-            ):
-                image_layer = self._get_layer_by_name_safe(
-                    self._image_layer_selection.currentText()
-                )
-                if image_layer is not None and (
-                    (
-                        self._current_target_image_name
-                        != self._image_layer_selection.currentText()
-                    )
-                    or set_image
-                ):
-                    self._current_target_image_name = (
-                        self._image_layer_selection.currentText()
-                    )
-                    self._image_type = check_image_type(
-                        self._viewer, self._image_layer_selection.currentText()
-                    )
-                    if "stack" in self._image_type:
-                        self._current_slice, _, _ = (
-                            self._viewer.dims.current_step
-                        )
-                    else:
-                        self._current_slice = None
-                    self.sam_predictor.set_image(
-                        preprocess(
-                            image_layer.data,
-                            self._image_type,
-                            self._current_slice,
-                        )
-                    )
-                    print("Set image")
-                    # self._corner = self._viewer.layers[self._image_layer_selection.currentText()].corner_pixels
+        # API mode: no predictor setup needed
+        if self._use_api_checkbox.isChecked():
+            print("Image selected for API mode")
+            return
 
     def _on_sam_box_created(self, layer, event):
+        if self._manual_mode_checkbox.isChecked():
+            return
         # mouse click
         yield
         # mouse move
@@ -914,6 +965,10 @@ class SAMWidget(QWidget):
             return None
 
     def _accept_mask(self, layer):
+        # Guard: skip if mask is empty (no painted pixels)
+        if not np.any(self._labels_layer.data):
+            print("Nothing to accept (empty mask)")
+            return
         selected_class = self._get_selected_class()
         button_id = self._radio_btn_group.checkedId()
         if button_id == 0:
@@ -996,12 +1051,22 @@ class SAMWidget(QWidget):
         self._input_point = None
         self._point_label = None
 
+        # In manual mode, return to paint mode on SAM-Predict
+        if self._manual_mode_checkbox.isChecked():
+            self._viewer.layers.selection.active = self._labels_layer
+            self._labels_layer.mode = "paint"
+
     def _reject_mask(self, layer):
         self._labels_layer.data = np.zeros_like(self._labels_layer.data)
-        self._viewer.layers.selection.active = self._sam_box_layer
         self._input_box = None
         self._sam_positive_point_layer.data = []
         self._sam_negative_point_layer.data = []
+
+        if self._manual_mode_checkbox.isChecked():
+            self._viewer.layers.selection.active = self._labels_layer
+            self._labels_layer.mode = "paint"
+        else:
+            self._viewer.layers.selection.active = self._sam_box_layer
 
     def _save(self):
         if self._shapes_layer_selection.currentText() != "":
@@ -1060,6 +1125,8 @@ class SAMWidget(QWidget):
             pass
 
     def lock_controls(self, layer, locked=True):
+        import warnings
+
         widget_list = [
             "ellipse_button",
             "line_button",
@@ -1073,9 +1140,23 @@ class SAMWidget(QWidget):
             "direct_button",
             "delete_button",
         ]
-        qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Public access to Window.qt_viewer",
+                    category=FutureWarning,
+                )
+                qctrl = self._viewer.window.qt_viewer.controls.widgets[layer]
+        except (AttributeError, KeyError):
+            # Controls container not available for this layer
+            return
+
+        # Lock/unlock each control individually to avoid skipping if one is missing
         for wdg in widget_list:
-            getattr(qctrl, wdg).setEnabled(not locked)
+            ctrl = getattr(qctrl, wdg, None)
+            if ctrl is not None and hasattr(ctrl, "setEnabled"):
+                ctrl.setEnabled(not locked)
 
     def print_corner_value(self):
         print(self._viewer.dims.current_step)

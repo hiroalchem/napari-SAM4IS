@@ -133,3 +133,26 @@ def test_create_json_backward_compatible():
     assert len(result["categories"]) == 1
     assert result["categories"][0]["name"] == "object"
     assert result["annotations"][0]["category_id"] == 0
+
+
+def test_manual_mode_toggle(make_napari_viewer):
+    """Test manual mode toggle enables/disables correct controls."""
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    # Enable manual mode
+    widget._manual_mode_checkbox.setChecked(True)
+    assert not widget._model_selection.isEnabled()
+    assert not widget._model_load_btn.isEnabled()
+    assert not widget._sam_box_layer.visible
+    assert not widget._sam_positive_point_layer.visible
+    assert not widget._sam_negative_point_layer.visible
+
+    # Disable manual mode
+    widget._manual_mode_checkbox.setChecked(False)
+    assert widget._model_selection.isEnabled()
+    assert widget._model_load_btn.isEnabled()
+    assert widget._sam_box_layer.visible
+    assert widget._sam_positive_point_layer.visible
+    assert widget._sam_negative_point_layer.visible
