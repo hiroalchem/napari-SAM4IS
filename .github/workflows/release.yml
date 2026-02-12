@@ -1,44 +1,11 @@
-# This workflow runs tests and automatically creates releases when tags are pushed
-# For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
-
-name: Test and Deploy
+name: Release and Publish
 
 on:
   push:
-    branches:
-      - main
-      - npe2
     tags:
-      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
-  pull_request:
-    branches:
-      - main
-      - npe2
-  workflow_dispatch:
+      - 'v*'  # Trigger on version tags like v0.1.2, v1.0.0, etc.
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install linting dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff black
-
-      - name: Run ruff
-        run: ruff check src/
-
-      - name: Run black (check only)
-        run: black --check src/
-
   test:
     name: ${{ matrix.platform }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.platform }}
@@ -73,10 +40,6 @@ jobs:
           git clone --depth 1 https://github.com/pyvista/gl-ci-helpers.git
           powershell gl-ci-helpers/appveyor/install_opengl.ps1
 
-      # note: if you need dependencies from conda, considering using
-      # setup-miniconda: https://github.com/conda-incubator/setup-miniconda
-      # and
-      # tox-conda: https://github.com/tox-dev/tox-conda
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -90,31 +53,35 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
 
-      - name: Coverage
-        uses: codecov/codecov-action@v3
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run linting
+        run: ruff check src/
 
   build:
+    needs: test
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-      
+          python-version: '3.11'
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           pip install build twine
-      
+
       - name: Build package
         run: python -m build
-      
+
       - name: Check built packages
         run: twine check dist/*
-      
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -124,32 +91,31 @@ jobs:
   create-release:
     needs: [test, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
-    
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: built-packages
           path: dist/
-      
+
       - name: Extract tag name
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      
+
       - name: Generate changelog
         id: changelog
         run: |
           # Extract version from tag (remove 'v' prefix)
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          
+
           # Create a simple changelog from commits since last tag
           LAST_TAG=$(git tag --sort=-version:refname | head -n 2 | tail -n 1 2>/dev/null || echo "")
           if [ -n "$LAST_TAG" ] && [ "$LAST_TAG" != "${GITHUB_REF#refs/tags/}" ]; then
@@ -158,7 +124,7 @@ jobs:
             # First release - show recent commits
             CHANGELOG=$(git log --pretty=format:"- %s" --max-count=10)
           fi
-          
+
           # Save changelog to output
           {
             echo "changelog<<EOF"
@@ -178,7 +144,7 @@ jobs:
             echo "\`\`\`"
             echo "EOF"
           } >> $GITHUB_OUTPUT
-      
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -189,25 +155,24 @@ jobs:
             --notes "${{ steps.changelog.outputs.changelog }}" \
             dist/*
 
-  deploy:
-    # this will run when you have tagged a commit, starting with "v*"
-    # and requires that you have put your twine API key in your
-    # github secrets (see readme for details)
+  publish-pypi:
     needs: [test, build, create-release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     environment: pypi
-    
+    permissions:
+      id-token: write  # OIDC for PyPI trusted publishing
+
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: built-packages
           path: dist/
-      
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Use API token authentication (OIDC not configured yet)
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Use OIDC trusted publishing (recommended)
+          # No API token needed if properly configured
+          password: ${{ secrets.PYPI_API_TOKEN }}  # Fallback to API token
           verbose: true
