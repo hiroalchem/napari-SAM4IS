@@ -1499,26 +1499,30 @@ class SAMWidget(QWidget):
         if json_path in self._auto_loaded_paths:
             return
 
-        self._auto_loaded_paths.add(json_path)
-        self._load_annotations_with_confirm(json_path)
+        if self._load_annotations_with_confirm(json_path):
+            self._auto_loaded_paths.add(json_path)
 
     def _load_annotations_with_confirm(self, json_path):
-        """Load annotations, asking to replace if shapes exist."""
+        """Load annotations, asking to replace if shapes exist.
+
+        Returns True if annotations were loaded successfully.
+        """
         button_id = self._radio_btn_group.checkedId()
         if button_id != 0:
             print("Annotation loading is only supported in instance mode")
-            return
+            return False
 
         output_name = self._shapes_layer_selection.currentText()
         if not output_name:
             print("No output shapes layer selected")
-            return
+            return False
 
         output_layer = self._get_layer_by_name_safe(output_name)
         if output_layer is None:
-            return
+            return False
 
-        if len(output_layer.data) > 0:
+        needs_replace = len(output_layer.data) > 0
+        if needs_replace:
             reply = QMessageBox.question(
                 self,
                 "Replace annotations?",
@@ -1527,18 +1531,20 @@ class SAMWidget(QWidget):
                 QMessageBox.Cancel,
             )
             if reply != QMessageBox.Yes:
-                return
-            self._reset_output_layer(output_layer)
+                return False
 
-        self._load_annotations(json_path, output_layer)
+        return self._load_annotations(json_path, output_layer, needs_replace)
 
-    def _load_annotations(self, json_path, output_layer):
-        """Load annotations from COCO JSON into output layer."""
+    def _load_annotations(self, json_path, output_layer, needs_replace=False):
+        """Load annotations from COCO JSON into output layer.
+
+        Returns True if annotations were loaded successfully.
+        """
         try:
             result = load_json(json_path)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             print(f"Failed to load JSON: {e}")
-            return
+            return False
 
         annotations = result["annotations"]
         categories = result["categories"]
@@ -1563,7 +1569,11 @@ class SAMWidget(QWidget):
                     QMessageBox.Cancel,
                 )
                 if reply != QMessageBox.Yes:
-                    return
+                    return False
+
+        # All validation passed — safe to reset now
+        if needs_replace:
+            self._reset_output_layer(output_layer)
 
         # Restore categories to class list
         if categories:
@@ -1627,6 +1637,7 @@ class SAMWidget(QWidget):
             f"Loaded {loaded_count} annotations from "
             f"{os.path.basename(json_path)}"
         )
+        return True
 
     def lock_controls(self, layer, locked=True):
         import warnings
