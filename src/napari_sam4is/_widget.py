@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+from datetime import datetime
 
 import napari
 import numpy as np
@@ -10,6 +11,7 @@ import requests
 import torch
 import yaml
 from PIL import Image
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -38,9 +40,25 @@ from ._utils import (
     find_missing_class_number,
     get_available_model_names,
     label2polygon,
+    load_json,
     load_model,
     preprocess,
 )
+
+_ATTR_COLUMNS = {
+    "class": str,
+    "unclear": bool,
+    "uncertain": bool,
+    "review_status": str,
+    "reviewed_at": str,
+}
+_ATTR_DEFAULTS = {
+    "class": "",
+    "unclear": False,
+    "uncertain": False,
+    "review_status": "unreviewed",
+    "reviewed_at": "",
+}
 
 
 class SAMWidget(QWidget):
@@ -147,6 +165,9 @@ class SAMWidget(QWidget):
                 if isinstance(layer, napari.layers.shapes.shapes.Shapes)
             ]
         )
+        self._shapes_layer_selection.currentTextChanged.connect(
+            self._on_shapes_layer_combo_changed
+        )
         self.vbox.addWidget(self._shapes_layer_selection)
 
         self.vbox.addWidget(QLabel("output labels layer"))
@@ -193,19 +214,62 @@ class SAMWidget(QWidget):
         self._class_group.setLayout(self._class_layout)
         self.vbox.addWidget(self._class_group)
 
+        # --- Annotation Attributes group ---
+        self._attr_group = QGroupBox("Annotation Attributes")
+        self._attr_layout = QVBoxLayout()
+
+        self._unclear_checkbox = QCheckBox("Unclear boundary")
+        self._unclear_checkbox.setTristate(True)
+        self._unclear_checkbox.setEnabled(False)
+        self._unclear_checkbox.stateChanged.connect(self._on_unclear_toggled)
+        self._attr_layout.addWidget(self._unclear_checkbox)
+
+        self._uncertain_checkbox = QCheckBox("Uncertain class")
+        self._uncertain_checkbox.setTristate(True)
+        self._uncertain_checkbox.setEnabled(False)
+        self._uncertain_checkbox.stateChanged.connect(
+            self._on_uncertain_toggled
+        )
+        self._attr_layout.addWidget(self._uncertain_checkbox)
+
+        self._review_btn_layout = QHBoxLayout()
+        self._review_selected_btn = QPushButton("Review Selected")
+        self._review_selected_btn.clicked.connect(self._review_selected)
+        self._review_selected_btn.setEnabled(False)
+        self._review_btn_layout.addWidget(self._review_selected_btn)
+        self._review_all_btn = QPushButton("Review All")
+        self._review_all_btn.clicked.connect(self._review_all)
+        self._review_btn_layout.addWidget(self._review_all_btn)
+        self._attr_layout.addLayout(self._review_btn_layout)
+
+        self._attr_status_label = QLabel("No annotation selected")
+        self._attr_layout.addWidget(self._attr_status_label)
+
+        self._attr_group.setLayout(self._attr_layout)
+        self.vbox.addWidget(self._attr_group)
+
+        self._updating_attr_ui = False
+        self._connected_output_layer = None
+
+        # --- Save / Load buttons ---
         self.vbox.addWidget(
             QLabel(
-                "Save as coco format \nin the same directory \nwith the input image"
+                "Save as coco format \nin the same directory"
+                " \nwith the input image"
             )
         )
-        self._save_btn = QPushButton("save")
+        self._save_load_layout = QHBoxLayout()
+        self._save_btn = QPushButton("Save")
         self._save_btn.clicked.connect(self._save)
-        self.vbox.addWidget(self._save_btn)
-        """
-        self._test_btn = QPushButton("corner")
-        self._test_btn.clicked.connect(self.print_corner_value)
-        self.vbox.addWidget(self._test_btn)
-        """
+        self._save_load_layout.addWidget(self._save_btn)
+        self._load_annotations_btn = QPushButton("Load Annotations")
+        self._load_annotations_btn.clicked.connect(
+            self._on_load_annotations_clicked
+        )
+        self._save_load_layout.addWidget(self._load_annotations_btn)
+        self.vbox.addLayout(self._save_load_layout)
+
+        self._auto_loaded_paths = set()
 
         self._sam_box_layer = self._viewer.add_shapes(
             name="SAM-Box",
@@ -494,6 +558,245 @@ class SAMWidget(QWidget):
                 self.check_box.setEnabled(True)
                 self.check_box.setStyleSheet("text-decoration: none")
 
+    # --- Features DataFrame Helpers ---
+
+    def _ensure_features_columns(self, layer):
+        """Ensure output shapes layer has all required columns."""
+        features = layer.features
+        changed = False
+        for col, dtype in _ATTR_COLUMNS.items():
+            if col not in features.columns:
+                features[col] = pd.Series(
+                    [_ATTR_DEFAULTS[col]] * len(features),
+                    dtype=dtype,
+                )
+                changed = True
+        if changed:
+            layer.features = features
+
+    def _reset_output_layer(self, layer):
+        """Reset data / features / feature_defaults."""
+        layer.data = []
+        layer.features = pd.DataFrame(
+            {
+                col: pd.Series(dtype=dtype)
+                for col, dtype in _ATTR_COLUMNS.items()
+            }
+        )
+        for key, val in _ATTR_DEFAULTS.items():
+            layer.feature_defaults[key] = val
+
+    # --- Output Layer Event Connection ---
+
+    def _on_shapes_layer_combo_changed(self, text):
+        """Handle output shapes layer ComboBox change."""
+        self._disconnect_output_layer_events()
+        if text:
+            layer = self._get_layer_by_name_safe(text)
+            if layer is not None and isinstance(
+                layer, napari.layers.shapes.shapes.Shapes
+            ):
+                self._connect_output_layer_events(layer)
+        self._on_output_selection_changed()
+
+    def _connect_output_layer_events(self, layer):
+        """Connect to output shapes layer highlight events."""
+        self._disconnect_output_layer_events()
+        layer.events.highlight.connect(self._on_output_selection_changed)
+        self._connected_output_layer = layer
+
+    def _disconnect_output_layer_events(self):
+        """Disconnect from previous output layer events."""
+        if self._connected_output_layer is not None:
+            import contextlib
+
+            with contextlib.suppress(TypeError, RuntimeError):
+                self._connected_output_layer.events.highlight.disconnect(
+                    self._on_output_selection_changed
+                )
+            self._connected_output_layer = None
+
+    # --- Annotation Attributes Handlers ---
+
+    def _on_output_selection_changed(self, event=None):
+        """Update attribute UI when output layer selection changes."""
+        if self._updating_attr_ui:
+            return
+        self._updating_attr_ui = True
+        try:
+            self._update_attr_ui()
+        finally:
+            self._updating_attr_ui = False
+
+    def _update_attr_ui(self):
+        """Sync attribute checkboxes and status label."""
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            self._set_attr_ui_disabled()
+            return
+
+        layer = self._get_layer_by_name_safe(output_name)
+        if layer is None or not isinstance(
+            layer, napari.layers.shapes.shapes.Shapes
+        ):
+            self._set_attr_ui_disabled()
+            return
+
+        selected = list(layer.selected_data)
+        if not selected:
+            self._set_attr_ui_disabled()
+            return
+
+        self._ensure_features_columns(layer)
+        features = layer.features
+
+        # Enable controls
+        self._unclear_checkbox.setEnabled(True)
+        self._uncertain_checkbox.setEnabled(True)
+        self._review_selected_btn.setEnabled(True)
+
+        # Unclear
+        unclear_vals = features.loc[selected, "unclear"]
+        self._set_tristate_checkbox(self._unclear_checkbox, unclear_vals)
+
+        # Uncertain
+        uncertain_vals = features.loc[selected, "uncertain"]
+        self._set_tristate_checkbox(self._uncertain_checkbox, uncertain_vals)
+
+        # Status label
+        if len(selected) == 1:
+            idx = selected[0]
+            status = features.at[idx, "review_status"]
+            reviewed_at = features.at[idx, "reviewed_at"]
+            reviewed_str = self._format_reviewed_at(reviewed_at)
+            self._attr_status_label.setText(
+                f"Status: {status} | Reviewed: {reviewed_str}"
+            )
+        else:
+            statuses = features.loc[selected, "review_status"].unique()
+            status_text = statuses[0] if len(statuses) == 1 else "mixed"
+            self._attr_status_label.setText(
+                f"Status: {status_text} ({len(selected)} selected)"
+            )
+
+    def _set_attr_ui_disabled(self):
+        """Disable attribute UI when no selection."""
+        self._unclear_checkbox.blockSignals(True)
+        self._unclear_checkbox.setCheckState(Qt.Unchecked)
+        self._unclear_checkbox.setEnabled(False)
+        self._unclear_checkbox.blockSignals(False)
+
+        self._uncertain_checkbox.blockSignals(True)
+        self._uncertain_checkbox.setCheckState(Qt.Unchecked)
+        self._uncertain_checkbox.setEnabled(False)
+        self._uncertain_checkbox.blockSignals(False)
+
+        self._review_selected_btn.setEnabled(False)
+        self._attr_status_label.setText("No annotation selected")
+
+    def _set_tristate_checkbox(self, checkbox, values):
+        """Set checkbox state based on selection values."""
+        checkbox.blockSignals(True)
+        all_true = values.all()
+        all_false = not values.any()
+        if all_true:
+            checkbox.setCheckState(Qt.Checked)
+        elif all_false:
+            checkbox.setCheckState(Qt.Unchecked)
+        else:
+            checkbox.setCheckState(Qt.PartiallyChecked)
+        checkbox.blockSignals(False)
+
+    def _format_reviewed_at(self, reviewed_at):
+        """Format reviewed_at for display."""
+        if not reviewed_at:
+            return "\u2014"
+        try:
+            dt = datetime.fromisoformat(reviewed_at)
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return str(reviewed_at)
+
+    def _on_unclear_toggled(self, state):
+        """Handle unclear checkbox toggle."""
+        if state == Qt.PartiallyChecked:
+            self._unclear_checkbox.blockSignals(True)
+            self._unclear_checkbox.setCheckState(Qt.Checked)
+            self._unclear_checkbox.blockSignals(False)
+            state = Qt.Checked
+
+        if self._updating_attr_ui:
+            return
+
+        value = state == Qt.Checked
+        self._set_selected_attr("unclear", value)
+
+    def _on_uncertain_toggled(self, state):
+        """Handle uncertain checkbox toggle."""
+        if state == Qt.PartiallyChecked:
+            self._uncertain_checkbox.blockSignals(True)
+            self._uncertain_checkbox.setCheckState(Qt.Checked)
+            self._uncertain_checkbox.blockSignals(False)
+            state = Qt.Checked
+
+        if self._updating_attr_ui:
+            return
+
+        value = state == Qt.Checked
+        self._set_selected_attr("uncertain", value)
+
+    def _set_selected_attr(self, attr_name, value):
+        """Set attribute for all selected shapes."""
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return
+        layer = self._get_layer_by_name_safe(output_name)
+        if layer is None:
+            return
+
+        self._ensure_features_columns(layer)
+        selected = list(layer.selected_data)
+        if selected:
+            layer.features.loc[selected, attr_name] = value
+
+    def _review_selected(self):
+        """Mark selected annotations as reviewed."""
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return
+        layer = self._get_layer_by_name_safe(output_name)
+        if layer is None:
+            return
+
+        self._ensure_features_columns(layer)
+        selected = list(layer.selected_data)
+        if not selected:
+            return
+
+        now = datetime.now().astimezone().isoformat()
+        layer.features.loc[selected, "review_status"] = "approved"
+        layer.features.loc[selected, "reviewed_at"] = now
+        self._on_output_selection_changed()
+
+    def _review_all(self):
+        """Mark all annotations as reviewed."""
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return
+        layer = self._get_layer_by_name_safe(output_name)
+        if layer is None:
+            return
+
+        self._ensure_features_columns(layer)
+        if len(layer.features) == 0:
+            return
+
+        now = datetime.now().astimezone().isoformat()
+        layer.features["review_status"] = "approved"
+        layer.features["reviewed_at"] = now
+        self._on_output_selection_changed()
+        print(f"Reviewed all {len(layer.features)} annotations")
+
     # --- Class Management Methods ---
 
     def _on_class_clicked(self):
@@ -726,8 +1029,9 @@ class SAMWidget(QWidget):
                 else:
                     self._current_slice = None
 
-        # Update SAM predictor (for local SAM mode, even if in manual mode)
-        # This ensures predictor has correct image when switching back to SAM mode
+        # Update SAM predictor (for local SAM mode, even
+        # if in manual mode). Ensures predictor has correct
+        # image when switching back to SAM mode.
         if (
             self.sam_predictor is not None
             and image_layer is not None
@@ -747,12 +1051,16 @@ class SAMWidget(QWidget):
             self._resize_labels_layer()
             self._labels_layer.mode = "paint"
             self._viewer.layers.selection.active = self._labels_layer
+            self._try_auto_load_annotations()
             return
 
         # API mode: no predictor setup needed
         if self._use_api_checkbox.isChecked():
             print("Image selected for API mode")
+            self._try_auto_load_annotations()
             return
+
+        self._try_auto_load_annotations()
 
     def _on_sam_box_created(self, layer, event):
         if self._manual_mode_checkbox.isChecked():
@@ -958,7 +1266,8 @@ class SAMWidget(QWidget):
             return self._viewer.layers[layer_name]
         except KeyError:
             print(
-                f"Warning: Layer '{layer_name}' not found. It may have been renamed."
+                f"Warning: Layer '{layer_name}' not found."
+                " It may have been renamed."
             )
             # Refresh layer selections and return None
             self._refresh_layer_selections()
@@ -981,10 +1290,12 @@ class SAMWidget(QWidget):
                     napari.layers.shapes.shapes.Shapes,
                 ):
                     # Initialize features/text if needed
-                    if "class" not in output_layer.features.columns:
-                        output_layer.features = pd.DataFrame(
-                            {"class": pd.Series(dtype=str)}
-                        )
+                    self._ensure_features_columns(output_layer)
+                    has_text = (
+                        hasattr(output_layer, "text")
+                        and output_layer.text.string
+                    )
+                    if not has_text:
                         output_layer.text = {
                             "string": "{class}",
                             "anchor": "upper_left",
@@ -992,6 +1303,9 @@ class SAMWidget(QWidget):
                             "color": "green",
                         }
                     output_layer.feature_defaults["class"] = selected_class
+                    for key, val in _ATTR_DEFAULTS.items():
+                        if key != "class":
+                            output_layer.feature_defaults[key] = val
                     output_layer.add_polygons(
                         label2polygon(self._labels_layer.data),
                         edge_width=2,
@@ -1105,6 +1419,30 @@ class SAMWidget(QWidget):
                 else:
                     category_ids = [0] * len(output_layer.data)
 
+                # Build attributes_list from features
+                attributes_list = None
+                if (
+                    "unclear" in output_layer.features.columns
+                    and len(output_layer.features) > 0
+                ):
+                    attributes_list = []
+                    for _, row in output_layer.features.iterrows():
+                        reviewed_at_val = row.get("reviewed_at", "")
+                        attrs = {
+                            "unclear": bool(row.get("unclear", False)),
+                            "uncertain": bool(row.get("uncertain", False)),
+                            "review_status": str(
+                                row.get(
+                                    "review_status",
+                                    "unreviewed",
+                                )
+                            ),
+                            "reviewed_at": (
+                                reviewed_at_val if reviewed_at_val else None
+                            ),
+                        }
+                        attributes_list.append(attrs)
+
                 output_path = os.path.join(
                     os.path.dirname(image_path),
                     os.path.splitext(image_name)[0] + ".json",
@@ -1115,6 +1453,7 @@ class SAMWidget(QWidget):
                     output_layer.data,
                     categories=categories,
                     category_ids=category_ids,
+                    attributes_list=attributes_list,
                 )
                 with open(output_path, "w") as f:
                     json.dump(data, f)
@@ -1123,6 +1462,171 @@ class SAMWidget(QWidget):
                 print("saved")
         else:
             pass
+
+    # --- Annotation Loading ---
+
+    def _on_load_annotations_clicked(self):
+        """Handle Load Annotations button click."""
+        fname, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load annotations JSON",
+            "",
+            "JSON files (*.json)",
+        )
+        if not fname:
+            return
+        self._load_annotations_with_confirm(fname)
+
+    def _try_auto_load_annotations(self):
+        """Try to auto-load annotations for current image."""
+        image_layer = self._get_layer_by_name_safe(
+            self._image_layer_selection.currentText()
+        )
+        if image_layer is None:
+            return
+        image_path = getattr(
+            getattr(image_layer, "source", None), "path", None
+        )
+        if not image_path:
+            return
+
+        json_path = os.path.join(
+            os.path.dirname(image_path),
+            os.path.splitext(os.path.basename(image_path))[0] + ".json",
+        )
+        if not os.path.exists(json_path):
+            return
+        if json_path in self._auto_loaded_paths:
+            return
+
+        self._auto_loaded_paths.add(json_path)
+        self._load_annotations_with_confirm(json_path)
+
+    def _load_annotations_with_confirm(self, json_path):
+        """Load annotations, asking to replace if shapes exist."""
+        button_id = self._radio_btn_group.checkedId()
+        if button_id != 0:
+            print("Annotation loading is only supported in instance mode")
+            return
+
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            print("No output shapes layer selected")
+            return
+
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if output_layer is None:
+            return
+
+        if len(output_layer.data) > 0:
+            reply = QMessageBox.question(
+                self,
+                "Replace annotations?",
+                "Output layer already has annotations. Replace them?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self._reset_output_layer(output_layer)
+
+        self._load_annotations(json_path, output_layer)
+
+    def _load_annotations(self, json_path, output_layer):
+        """Load annotations from COCO JSON into output layer."""
+        try:
+            result = load_json(json_path)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            print(f"Failed to load JSON: {e}")
+            return
+
+        annotations = result["annotations"]
+        categories = result["categories"]
+        image_info = result["image_info"]
+
+        # Check image size match
+        image_layer = self._get_layer_by_name_safe(
+            self._image_layer_selection.currentText()
+        )
+        if image_layer is not None and image_info:
+            img_h, img_w = image_layer.data.shape[:2]
+            json_h = image_info.get("height", 0)
+            json_w = image_info.get("width", 0)
+            if (json_h, json_w) != (img_h, img_w):
+                reply = QMessageBox.warning(
+                    self,
+                    "Image size mismatch",
+                    f"JSON image size ({json_w}x{json_h})"
+                    f" differs from current image "
+                    f"({img_w}x{img_h}). Continue?",
+                    QMessageBox.Yes | QMessageBox.Cancel,
+                    QMessageBox.Cancel,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
+        # Restore categories to class list
+        if categories:
+            self._class_list_widget.clear()
+            for cat in categories:
+                cat_id = cat.get("id", 0)
+                cat_name = cat.get("name", "object")
+                self._class_list_widget.addItem(f"{cat_id}: {cat_name}")
+            self._sort_class_list()
+
+        # Build category_id → class string mapping
+        cat_id_to_str = {}
+        for i in range(self._class_list_widget.count()):
+            text = self._class_list_widget.item(i).text()
+            parts = text.split(": ", 1)
+            cid = int(parts[0].strip())
+            cat_id_to_str[cid] = text
+
+        self._ensure_features_columns(output_layer)
+
+        has_text = hasattr(output_layer, "text") and output_layer.text.string
+        if not has_text:
+            output_layer.text = {
+                "string": "{class}",
+                "anchor": "upper_left",
+                "size": 10,
+                "color": "green",
+            }
+
+        loaded_count = 0
+        for ann in annotations:
+            polygon = ann["polygon"]
+            cat_id = ann["category_id"]
+            attrs = ann["attributes"]
+
+            class_str = cat_id_to_str.get(cat_id, f"{cat_id}: object")
+
+            # Set feature_defaults before adding
+            output_layer.feature_defaults["class"] = class_str
+            if attrs:
+                for key in (
+                    "unclear",
+                    "uncertain",
+                    "review_status",
+                    "reviewed_at",
+                ):
+                    val = attrs.get(key, _ATTR_DEFAULTS[key])
+                    if val is None:
+                        val = _ATTR_DEFAULTS[key]
+                    output_layer.feature_defaults[key] = val
+            else:
+                for key, val in _ATTR_DEFAULTS.items():
+                    if key != "class":
+                        output_layer.feature_defaults[key] = val
+
+            output_layer.add_polygons([polygon], edge_width=2)
+            loaded_count += 1
+
+        output_layer.refresh_text()
+        print(
+            f"Loaded {loaded_count} annotations from "
+            f"{os.path.basename(json_path)}"
+        )
 
     def lock_controls(self, layer, locked=True):
         import warnings
@@ -1152,7 +1656,7 @@ class SAMWidget(QWidget):
             # Controls container not available for this layer
             return
 
-        # Lock/unlock each control individually to avoid skipping if one is missing
+        # Lock/unlock each control individually
         for wdg in widget_list:
             ctrl = getattr(qctrl, wdg, None)
             if ctrl is not None and hasattr(ctrl, "setEnabled"):

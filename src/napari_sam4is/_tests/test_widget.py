@@ -1,9 +1,14 @@
+import json
+import os
+import tempfile
+
 import numpy as np
 
 from napari_sam4is import SAMWidget
 from napari_sam4is._utils import (
     create_json,
     find_missing_class_number,
+    load_json,
 )
 
 
@@ -156,3 +161,357 @@ def test_manual_mode_toggle(make_napari_viewer):
     assert widget._sam_box_layer.visible
     assert widget._sam_positive_point_layer.visible
     assert widget._sam_negative_point_layer.visible
+
+
+# --- Annotation Attributes Tests ---
+
+
+def _make_polygon():
+    return np.array([[10, 10], [10, 20], [20, 20], [20, 10]])
+
+
+def test_create_json_with_attributes():
+    """Test attributes are included in COCO JSON."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+    attrs = [
+        {
+            "unclear": True,
+            "uncertain": False,
+            "review_status": "approved",
+            "reviewed_at": None,
+        }
+    ]
+    result = create_json(
+        image,
+        "test.png",
+        [polygon],
+        attributes_list=attrs,
+    )
+    ann = result["annotations"][0]
+    assert "attributes" in ann
+    assert ann["attributes"]["unclear"] is True
+    assert ann["attributes"]["reviewed_at"] is None
+
+
+def test_create_json_without_attributes():
+    """Test backward compat: no attributes key."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+    result = create_json(image, "test.png", [polygon])
+    ann = result["annotations"][0]
+    assert "attributes" not in ann
+
+
+def test_load_json_roundtrip():
+    """Test create_json → load_json coordinate roundtrip."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+    attrs = [
+        {
+            "unclear": True,
+            "uncertain": False,
+            "review_status": "approved",
+            "reviewed_at": "2026-02-13T10:00:00+09:00",
+        }
+    ]
+    coco = create_json(
+        image,
+        "test.png",
+        [polygon],
+        attributes_list=attrs,
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        loaded = result["annotations"]
+        assert len(loaded) == 1
+        loaded_poly = loaded[0]["polygon"]
+        np.testing.assert_array_equal(loaded_poly, polygon)
+        assert loaded[0]["attributes"]["unclear"] is True
+        assert (
+            loaded[0]["attributes"]["reviewed_at"]
+            == "2026-02-13T10:00:00+09:00"
+        )
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_load_json_multi_polygon():
+    """Test multi-polygon split into separate shapes."""
+    polygon1 = _make_polygon()
+    polygon2 = np.array([[30, 30], [30, 40], [40, 40], [40, 30]])
+    coco = {
+        "images": [
+            {
+                "file_name": "test.png",
+                "height": 100,
+                "width": 100,
+                "id": 0,
+            }
+        ],
+        "annotations": [
+            {
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "segmentation": [
+                    polygon1.flatten().tolist()[::-1],
+                    polygon2.flatten().tolist()[::-1],
+                ],
+                "area": 100,
+                "bbox": [10, 10, 10, 10],
+                "iscrowd": 0,
+                "attributes": {
+                    "unclear": True,
+                    "uncertain": False,
+                    "review_status": "unreviewed",
+                    "reviewed_at": None,
+                },
+            }
+        ],
+        "categories": [
+            {
+                "id": 0,
+                "name": "object",
+                "supercategory": "object",
+            }
+        ],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        loaded = result["annotations"]
+        assert len(loaded) == 2
+        # Both should have same attributes (copied)
+        assert loaded[0]["attributes"]["unclear"] is True
+        assert loaded[1]["attributes"]["unclear"] is True
+        np.testing.assert_array_equal(loaded[0]["polygon"], polygon1)
+        np.testing.assert_array_equal(loaded[1]["polygon"], polygon2)
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_load_json_rle_skipped():
+    """Test RLE segmentation is skipped."""
+    coco = {
+        "images": [
+            {
+                "file_name": "test.png",
+                "height": 100,
+                "width": 100,
+                "id": 0,
+            }
+        ],
+        "annotations": [
+            {
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "segmentation": {
+                    "counts": [10, 20],
+                    "size": [100, 100],
+                },
+                "area": 100,
+                "bbox": [10, 10, 10, 10],
+                "iscrowd": 1,
+            }
+        ],
+        "categories": [],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        assert len(result["annotations"]) == 0
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_load_json_reviewed_at_null():
+    """Test reviewed_at null → empty string."""
+    polygon = _make_polygon()
+    coco = {
+        "images": [
+            {
+                "file_name": "test.png",
+                "height": 100,
+                "width": 100,
+                "id": 0,
+            }
+        ],
+        "annotations": [
+            {
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "segmentation": [polygon.flatten().tolist()[::-1]],
+                "area": 100,
+                "bbox": [10, 10, 10, 10],
+                "iscrowd": 0,
+                "attributes": {
+                    "unclear": False,
+                    "uncertain": False,
+                    "review_status": "unreviewed",
+                    "reviewed_at": None,
+                },
+            }
+        ],
+        "categories": [],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        attrs = result["annotations"][0]["attributes"]
+        assert attrs["reviewed_at"] == ""
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_reviewed_at_save_load_consistency():
+    """Test "" → null → "" roundtrip."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+    attrs = [
+        {
+            "unclear": False,
+            "uncertain": False,
+            "review_status": "unreviewed",
+            "reviewed_at": None,  # "" converted to None
+        }
+    ]
+    coco = create_json(
+        image,
+        "test.png",
+        [polygon],
+        attributes_list=attrs,
+    )
+    # JSON null
+    assert coco["annotations"][0]["attributes"]["reviewed_at"] is None
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        loaded_at = result["annotations"][0]["attributes"]["reviewed_at"]
+        assert loaded_at == ""
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_annotation_attributes_defaults(make_napari_viewer):
+    """Test features defaults after accept."""
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    # Set up instance mode with Accepted layer
+    widget._radio_btn_shape.setChecked(True)
+    output_name = "Accepted"
+    widget._shapes_layer_selection.setCurrentText(output_name)
+
+    output_layer = viewer.layers[output_name]
+
+    # Simulate adding a polygon via _ensure_features_columns
+    from napari_sam4is._widget import _ATTR_DEFAULTS
+
+    widget._ensure_features_columns(output_layer)
+
+    # Check columns exist
+    for col in (
+        "class",
+        "unclear",
+        "uncertain",
+        "review_status",
+        "reviewed_at",
+    ):
+        assert col in output_layer.features.columns
+
+    # Set defaults and add a shape manually
+    output_layer.feature_defaults["class"] = "0: object"
+    for key, val in _ATTR_DEFAULTS.items():
+        if key != "class":
+            output_layer.feature_defaults[key] = val
+
+    output_layer.add_polygons([_make_polygon()], edge_width=2)
+
+    row = output_layer.features.iloc[0]
+    assert row["unclear"] is False or row["unclear"] == 0
+    assert row["review_status"] == "unreviewed"
+    assert row["reviewed_at"] == ""
+
+
+def test_features_none_mixed_in():
+    """Test save/load with None mixed in features."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+
+    # Simulate _save() conversion: "" → None
+    attrs = [
+        {
+            "unclear": False,
+            "uncertain": False,
+            "review_status": "unreviewed",
+            "reviewed_at": None,
+        },
+        {
+            "unclear": True,
+            "uncertain": True,
+            "review_status": "approved",
+            "reviewed_at": "2026-02-13T10:00:00+09:00",
+        },
+    ]
+    polygon2 = np.array([[30, 30], [30, 40], [40, 40], [40, 30]])
+    coco = create_json(
+        image,
+        "test.png",
+        [polygon, polygon2],
+        attributes_list=attrs,
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        loaded = result["annotations"]
+        assert len(loaded) == 2
+        # First: None → ""
+        assert loaded[0]["attributes"]["reviewed_at"] == ""
+        # Second: timestamp preserved
+        assert (
+            loaded[1]["attributes"]["reviewed_at"]
+            == "2026-02-13T10:00:00+09:00"
+        )
+    finally:
+        os.unlink(tmp_path)

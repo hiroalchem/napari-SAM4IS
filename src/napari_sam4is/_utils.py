@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import urllib
 
@@ -5,6 +7,8 @@ import numpy as np
 from skimage.color import gray2rgb, rgba2rgb
 from skimage.draw import polygon2mask
 from skimage.measure import find_contours
+
+logger = logging.getLogger(__name__)
 
 MODEL_URLS = {
     "default": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
@@ -142,7 +146,14 @@ def label2polygon(label):
     return polygons
 
 
-def create_json(image, name, data, categories=None, category_ids=None):
+def create_json(
+    image,
+    name,
+    data,
+    categories=None,
+    category_ids=None,
+    attributes_list=None,
+):
     if categories is None:
         categories = [{"id": 0, "name": "object", "supercategory": "object"}]
     if category_ids is None:
@@ -173,11 +184,88 @@ def create_json(image, name, data, categories=None, category_ids=None):
             ],
             "iscrowd": 0,
         }
+        if attributes_list is not None and i < len(attributes_list):
+            annotation["attributes"] = attributes_list[i]
         annotations.append(annotation)
     return {
         "images": images,
         "annotations": annotations,
         "categories": categories,
+    }
+
+
+def load_json(json_path):
+    """Load COCO JSON and return parsed annotations.
+
+    Returns:
+        dict with keys:
+        - "categories": list of COCO category dicts
+        - "annotations": list of dicts, each with:
+            "polygon": np.ndarray(N,2), "category_id": int,
+            "attributes": dict or None
+        - "image_info": dict with "file_name", "height", "width"
+    """
+    with open(json_path) as f:
+        coco = json.load(f)
+
+    image_info = coco["images"][0] if coco.get("images") else {}
+    categories = coco.get("categories", [])
+
+    parsed = []
+    for i, ann in enumerate(coco.get("annotations", [])):
+        ann_id = ann.get("id")
+        seg = ann.get("segmentation")
+
+        if seg is None:
+            continue
+
+        # RLE format (dict) → skip
+        if isinstance(seg, dict):
+            logger.warning(
+                "Skipping annotation (id=%s, index=%d): RLE not supported",
+                ann_id,
+                i,
+            )
+            continue
+
+        # seg should be list-of-list (polygon format)
+        if not isinstance(seg, list):
+            continue
+
+        cat_id = ann.get("category_id", 0)
+        attrs = ann.get("attributes")
+
+        # Convert reviewed_at None → ""
+        if isinstance(attrs, dict) and attrs.get("reviewed_at") is None:
+            attrs["reviewed_at"] = ""
+
+        sub_polygons = []
+        for sub in seg:
+            if not isinstance(sub, list) or len(sub) < 6:
+                continue
+            coords = np.array(sub[::-1], dtype=float).reshape(-1, 2)
+            sub_polygons.append(coords)
+
+        if len(sub_polygons) > 1:
+            logger.info(
+                "Annotation (id=%s, index=%d): split into %d shapes",
+                ann_id,
+                i,
+                len(sub_polygons),
+            )
+
+        for poly in sub_polygons:
+            entry = {
+                "polygon": poly,
+                "category_id": cat_id,
+                "attributes": dict(attrs) if attrs else None,
+            }
+            parsed.append(entry)
+
+    return {
+        "categories": categories,
+        "annotations": parsed,
+        "image_info": image_info,
     }
 
 
