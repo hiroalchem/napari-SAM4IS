@@ -75,6 +75,7 @@ class SAMWidget(QWidget):
         self._point_label = None
         self._label_id_to_class = {}
         self._current_target_image_name = None
+        self._current_target_image_layer = None
 
         # self._corner = None
 
@@ -266,8 +267,6 @@ class SAMWidget(QWidget):
         )
         self._save_load_layout.addWidget(self._load_annotations_btn)
         self.vbox.addLayout(self._save_load_layout)
-
-        self._auto_loaded_paths = set()
 
         self._sam_box_layer = self._viewer.add_shapes(
             name="SAM-Box",
@@ -755,16 +754,22 @@ class SAMWidget(QWidget):
         """Handle unclear checkbox toggle."""
         if self._updating_attr_ui:
             return
-        # Use int() to handle PySide6 int/enum mismatch
-        value = int(state) != 0
+        int_state = int(state)
+        if int_state == 1:  # PartiallyChecked → normalize to Checked
+            self._unclear_checkbox.setCheckState(Qt.Checked)
+            return  # setCheckState re-fires stateChanged with Checked
+        value = int_state != 0
         self._set_selected_attr("unclear", value)
 
     def _on_uncertain_toggled(self, state):
         """Handle uncertain checkbox toggle."""
         if self._updating_attr_ui:
             return
-        # Use int() to handle PySide6 int/enum mismatch
-        value = int(state) != 0
+        int_state = int(state)
+        if int_state == 1:  # PartiallyChecked → normalize to Checked
+            self._uncertain_checkbox.setCheckState(Qt.Checked)
+            return
+        value = int_state != 0
         self._set_selected_attr("uncertain", value)
 
     def _set_selected_attr(self, attr_name, value):
@@ -1059,21 +1064,119 @@ class SAMWidget(QWidget):
         if self._image_layer_selection.currentText() != "":
             self._on_image_layer_changed(True)
 
+    def _prompt_save_before_switch(self, prev_image_name):
+        """Prompt user to save annotations before switching images.
+
+        Returns True if the switch should proceed, False to cancel.
+        """
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return True
+
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if output_layer is None or not isinstance(
+            output_layer, napari.layers.shapes.shapes.Shapes
+        ):
+            return True
+
+        if len(output_layer.data) == 0:
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Save annotations?",
+            "Current image has unsaved annotations.\n"
+            "Save before switching?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if reply == QMessageBox.Cancel:
+            return False
+        if reply == QMessageBox.Save and not self._save_impl(
+            image_layer_name=prev_image_name
+        ):
+            print("Save failed, cancelling image switch")
+            return False
+        return True
+
+    def _notify_discard_on_deleted_image(self):
+        """Notify that annotations will be discarded (previous image gone).
+
+        When the previous image layer has been deleted, there is no valid
+        save target and no image to revert to, so discard is the only option.
+        """
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return
+
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if output_layer is None or not isinstance(
+            output_layer, napari.layers.shapes.shapes.Shapes
+        ):
+            return
+
+        if len(output_layer.data) == 0:
+            return
+
+        QMessageBox.information(
+            self,
+            "Annotations discarded",
+            "Previous image was removed.\n"
+            "Unsaved annotations have been discarded.",
+        )
+
     def _on_image_layer_changed(self, set_image=False):
         print("image_layer_changed")
 
-        # Update image metadata (needed for all modes)
         layer_name = self._image_layer_selection.currentText()
-        image_layer = None
+
+        # Resolve current layer object
+        new_layer = None
         if layer_name and layer_name in self._viewer.layers:
-            image_layer = self._get_layer_by_name_safe(layer_name)
-            if image_layer is not None:
-                self._current_target_image_name = layer_name
-                self._image_type = check_image_type(self._viewer, layer_name)
-                if "stack" in self._image_type:
-                    self._current_slice, _, _ = self._viewer.dims.current_step
-                else:
-                    self._current_slice = None
+            new_layer = self._get_layer_by_name_safe(layer_name)
+
+        # Detect real image switch (not just a rename)
+        prev_layer = getattr(self, "_current_target_image_layer", None)
+        prev_name = getattr(self, "_current_target_image_name", None)
+        is_real_switch = (
+            new_layer is not None
+            and prev_layer is not None
+            and new_layer is not prev_layer
+        )
+
+        if is_real_switch:
+            prev_still_exists = prev_layer in self._viewer.layers
+            if prev_still_exists:
+                if not self._prompt_save_before_switch(prev_name):
+                    # Cancel → revert ComboBox to previous image
+                    self._image_layer_selection.blockSignals(True)
+                    self._image_layer_selection.setCurrentText(prev_layer.name)
+                    self._image_layer_selection.blockSignals(False)
+                    return
+            else:
+                # Previous image deleted — no save target, must discard
+                self._notify_discard_on_deleted_image()
+
+            # Clear output layer for new image
+            output_name = self._shapes_layer_selection.currentText()
+            if output_name:
+                output_layer = self._get_layer_by_name_safe(output_name)
+                if output_layer is not None and isinstance(
+                    output_layer,
+                    napari.layers.shapes.shapes.Shapes,
+                ):
+                    self._reset_output_layer(output_layer)
+
+        # Update image metadata (needed for all modes)
+        image_layer = new_layer
+        if image_layer is not None:
+            self._current_target_image_name = layer_name
+            self._current_target_image_layer = image_layer
+            self._image_type = check_image_type(self._viewer, layer_name)
+            if "stack" in self._image_type:
+                self._current_slice, _, _ = self._viewer.dims.current_step
+            else:
+                self._current_slice = None
 
         # Update SAM predictor (for local SAM mode, even
         # if in manual mode). Ensures predictor has correct
@@ -1425,85 +1528,101 @@ class SAMWidget(QWidget):
             self._viewer.layers.selection.active = self._sam_box_layer
 
     def _save(self):
-        if self._shapes_layer_selection.currentText() != "":
-            image_layer = self._get_layer_by_name_safe(
-                self._image_layer_selection.currentText()
-            )
-            if image_layer is None:
-                print("Image layer not found or was renamed")
-                return
+        """Save button handler (absorbs bool from clicked signal)."""
+        self._save_impl()
 
-            image_path = image_layer.source.path
-            image_name = os.path.basename(image_path)
-            output_layer = self._get_layer_by_name_safe(
-                self._shapes_layer_selection.currentText()
-            )
-            if output_layer is None:
-                print("Output layer not found or was renamed")
-                return
-            if isinstance(
-                output_layer,
-                napari.layers.shapes.shapes.Shapes,
-            ):
-                categories = self._build_categories_list()
+    def _save_impl(self, image_layer_name=None):
+        """Save annotations to COCO JSON.
 
-                category_ids = []
-                if (
-                    "class" in output_layer.features.columns
-                    and len(output_layer.features) > 0
-                ):
-                    for cls_str in output_layer.features["class"]:
-                        try:
-                            cat_id = int(str(cls_str).split(":")[0].strip())
-                        except (ValueError, IndexError):
-                            cat_id = 0
-                        category_ids.append(cat_id)
-                else:
-                    category_ids = [0] * len(output_layer.data)
+        Args:
+            image_layer_name: Override image layer name.
+                If None, uses the current ComboBox selection.
 
-                # Build attributes_list from features
-                attributes_list = None
-                if (
-                    "unclear" in output_layer.features.columns
-                    and len(output_layer.features) > 0
-                ):
-                    attributes_list = []
-                    for _, row in output_layer.features.iterrows():
-                        reviewed_at_val = row.get("reviewed_at", "")
-                        attrs = {
-                            "unclear": bool(row.get("unclear", False)),
-                            "uncertain": bool(row.get("uncertain", False)),
-                            "review_status": str(
-                                row.get(
-                                    "review_status",
-                                    "unreviewed",
-                                )
-                            ),
-                            "reviewed_at": (
-                                reviewed_at_val if reviewed_at_val else None
-                            ),
-                        }
-                        attributes_list.append(attrs)
+        Returns:
+            True if saved successfully, False otherwise.
+        """
+        if self._shapes_layer_selection.currentText() == "":
+            return False
 
-                output_path = os.path.join(
-                    os.path.dirname(image_path),
-                    os.path.splitext(image_name)[0] + ".json",
-                )
-                data = create_json(
-                    image_layer.data,
-                    image_name,
-                    output_layer.data,
-                    categories=categories,
-                    category_ids=category_ids,
-                    attributes_list=attributes_list,
-                )
-                with open(output_path, "w") as f:
-                    json.dump(data, f)
+        if image_layer_name is None:
+            image_layer_name = self._image_layer_selection.currentText()
+        image_layer = self._get_layer_by_name_safe(image_layer_name)
+        if image_layer is None:
+            print("Image layer not found or was renamed")
+            return False
 
-                self._save_class_yaml(os.path.dirname(image_path))
-                print("saved")
+        image_path = image_layer.source.path
+        image_name = os.path.basename(image_path)
+        output_layer = self._get_layer_by_name_safe(
+            self._shapes_layer_selection.currentText()
+        )
+        if output_layer is None:
+            print("Output layer not found or was renamed")
+            return False
+        if not isinstance(
+            output_layer,
+            napari.layers.shapes.shapes.Shapes,
+        ):
+            return False
+
+        categories = self._build_categories_list()
+
+        category_ids = []
+        if (
+            "class" in output_layer.features.columns
+            and len(output_layer.features) > 0
+        ):
+            for cls_str in output_layer.features["class"]:
+                try:
+                    cat_id = int(str(cls_str).split(":")[0].strip())
+                except (ValueError, IndexError):
+                    cat_id = 0
+                category_ids.append(cat_id)
         else:
-            pass
+            category_ids = [0] * len(output_layer.data)
+
+        # Build attributes_list from features
+        attributes_list = None
+        if (
+            "unclear" in output_layer.features.columns
+            and len(output_layer.features) > 0
+        ):
+            attributes_list = []
+            for _, row in output_layer.features.iterrows():
+                reviewed_at_val = row.get("reviewed_at", "")
+                attrs = {
+                    "unclear": bool(row.get("unclear", False)),
+                    "uncertain": bool(row.get("uncertain", False)),
+                    "review_status": str(
+                        row.get(
+                            "review_status",
+                            "unreviewed",
+                        )
+                    ),
+                    "reviewed_at": (
+                        reviewed_at_val if reviewed_at_val else None
+                    ),
+                }
+                attributes_list.append(attrs)
+
+        output_path = os.path.join(
+            os.path.dirname(image_path),
+            os.path.splitext(image_name)[0] + ".json",
+        )
+        data = create_json(
+            image_layer.data,
+            image_name,
+            output_layer.data,
+            categories=categories,
+            category_ids=category_ids,
+            attributes_list=attributes_list,
+        )
+        with open(output_path, "w") as f:
+            json.dump(data, f)
+
+        self._save_class_yaml(os.path.dirname(image_path))
+        print("saved")
+        return True
 
     # --- Annotation Loading ---
 
@@ -1520,7 +1639,11 @@ class SAMWidget(QWidget):
         self._load_annotations_with_confirm(fname)
 
     def _try_auto_load_annotations(self):
-        """Try to auto-load annotations for current image."""
+        """Auto-load annotations for current image if output is empty."""
+        # Guard: instance mode only
+        if self._radio_btn_group.checkedId() != 0:
+            return
+
         image_layer = self._get_layer_by_name_safe(
             self._image_layer_selection.currentText()
         )
@@ -1538,11 +1661,20 @@ class SAMWidget(QWidget):
         )
         if not os.path.exists(json_path):
             return
-        if json_path in self._auto_loaded_paths:
+
+        # Guard: output shapes layer must exist and be empty
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if output_layer is None or not isinstance(
+            output_layer, napari.layers.shapes.shapes.Shapes
+        ):
+            return
+        if len(output_layer.data) > 0:
             return
 
-        if self._load_annotations_with_confirm(json_path):
-            self._auto_loaded_paths.add(json_path)
+        self._load_annotations(json_path, output_layer, needs_replace=False)
 
     def _load_annotations_with_confirm(self, json_path):
         """Load annotations, asking to replace if shapes exist.
