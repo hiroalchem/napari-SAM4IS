@@ -71,7 +71,7 @@ For more detailed instructions, please refer to the [SAM installation guide](htt
 ## Usage
 ### Preparation
 1. Open an image in napari and launch the plugin. (Opening an image after launching the plugin is also possible.)
-2. Upon launching the plugin, three layers will be automatically created: SAM-Box, SAM-Predict, and Accepted. The usage of these layers will be explained later.
+2. Upon launching the plugin, several layers will be automatically created: SAM-Box, SAM-Positive, SAM-Negative, SAM-Predict, and Accepted. The usage of these layers will be explained later.
 3. Choose between local model or API mode:
    - **Local Model Mode**: Select the model you want to use and click the load button. (The default option is recommended.)
    - **API Mode**: Check the "Use API" checkbox, then enter your API URL and API Key. No model loading is required.
@@ -98,11 +98,12 @@ You can define annotation classes to assign to each segmented object.
 ### Annotation with SAM
 1. Select the SAM-Box layer and use the rectangle tool to enclose the object you want to segment.
 2. An automatic segmentation mask will be created and output to the SAM-Predict layer.
-3. If you want to make adjustments, do so in the SAM-Predict layer.
-4. To accept or reject the annotation, press "a" or "r" on the keyboard, respectively.
-5. If you accept the annotation, it will be output as label 1 for semantic segmentation or converted to a polygon and output to the designated layer for instance segmentation. The currently selected class will be assigned to the annotation.
-6. If you reject the annotation, the segmentation mask in the SAM-Predict layer will be discarded.
-7. After accepting or rejecting the annotation, the SAM-Predict layer will automatically reset to blank and return to the SAM-Box layer.
+3. You can refine the prediction by adding point prompts: click on the SAM-Positive layer to add points that should be included, or on the SAM-Negative layer to add points that should be excluded.
+4. If you want to make further adjustments, do so in the SAM-Predict layer.
+5. To accept or reject the annotation, press **A** or **R** on the keyboard, respectively.
+6. If you accept the annotation, it will be output as label 1 for semantic segmentation or converted to a polygon and output to the designated layer for instance segmentation. The currently selected class will be assigned to the annotation.
+7. If you reject the annotation, the segmentation mask in the SAM-Predict layer will be discarded.
+8. After accepting or rejecting the annotation, the SAM-Predict layer will automatically reset to blank and return to the SAM-Box layer.
 
 ### Manual Annotation (without SAM)
 You can also annotate without using SAM by enabling **Manual Mode**.
@@ -113,9 +114,25 @@ You can also annotate without using SAM by enabling **Manual Mode**.
 4. Press **A** to accept or **R** to reject, just like SAM mode.
 5. After accepting, the painted mask is converted to a polygon (instance mode) or merged into the output Labels layer (semantic mode), with the selected class assigned.
 
-### Saving
+### Annotation Attributes
+Each annotation can have additional attributes to support quality control workflows.
+
+1. Select one or more annotations in the output Shapes layer.
+2. In the **Attributes** panel, you can set:
+   - **Unclear**: Mark annotations where the object boundary is ambiguous.
+   - **Uncertain**: Mark annotations where the object class is uncertain.
+   - **Reviewed at**: Automatically records a timestamp when an annotation is reviewed. Click **Mark reviewed** to set, or **Clear** to reset.
+3. Attributes are saved as part of the COCO JSON output under each annotation's `"attributes"` field.
+4. When multiple annotations are selected with mixed attribute values, checkboxes show a mixed state indicator.
+
+### Saving and Loading Annotations
 1. If you have output to the labels layer, use napari's standard functionality to save the mask.
-2. If you have output to the shapes layer, you can save the shapes layer using napari's standard functionality, or you can click the "save" button to output a JSON file in COCO format for each image in the folder. (The JSON file will have the same name as the image.) Class definitions will also be saved as `class.yaml` in the same directory.
+2. If you have output to the shapes layer, you can save the shapes layer using napari's standard functionality, or you can click the **Save** button to output a JSON file in COCO format for each image in the folder. (The JSON file will have the same name as the image.) Class definitions will also be saved as `class.yaml` in the same directory.
+3. To load previously saved annotations, click the **Load** button and select a COCO JSON file. Annotations, class definitions, and attributes will be restored.
+4. When switching images via the Image ComboBox, the plugin will:
+   - Prompt to save unsaved annotations (Save / Discard / Cancel)
+   - Automatically clear the output layer
+   - Auto-load annotations from a matching JSON file if one exists
 
 
 
