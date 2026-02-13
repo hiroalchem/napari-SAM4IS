@@ -233,13 +233,13 @@ class SAMWidget(QWidget):
         self._attr_layout.addWidget(self._uncertain_checkbox)
 
         self._review_btn_layout = QHBoxLayout()
-        self._review_selected_btn = QPushButton("Review Selected")
-        self._review_selected_btn.clicked.connect(self._review_selected)
-        self._review_selected_btn.setEnabled(False)
-        self._review_btn_layout.addWidget(self._review_selected_btn)
-        self._review_all_btn = QPushButton("Review All")
-        self._review_all_btn.clicked.connect(self._review_all)
-        self._review_btn_layout.addWidget(self._review_all_btn)
+        self._accept_selected_btn = QPushButton("Accept Selected")
+        self._accept_selected_btn.clicked.connect(self._accept_selected)
+        self._accept_selected_btn.setEnabled(False)
+        self._review_btn_layout.addWidget(self._accept_selected_btn)
+        self._accept_all_btn = QPushButton("Accept All")
+        self._accept_all_btn.clicked.connect(self._accept_all)
+        self._review_btn_layout.addWidget(self._accept_all_btn)
         self._attr_layout.addLayout(self._review_btn_layout)
 
         self._attr_status_label = QLabel("No annotation selected")
@@ -653,7 +653,7 @@ class SAMWidget(QWidget):
         # Enable controls
         self._unclear_checkbox.setEnabled(True)
         self._uncertain_checkbox.setEnabled(True)
-        self._review_selected_btn.setEnabled(True)
+        self._accept_selected_btn.setEnabled(True)
 
         # Unclear
         unclear_vals = features.loc[selected, "unclear"]
@@ -691,7 +691,7 @@ class SAMWidget(QWidget):
         self._uncertain_checkbox.setEnabled(False)
         self._uncertain_checkbox.blockSignals(False)
 
-        self._review_selected_btn.setEnabled(False)
+        self._accept_selected_btn.setEnabled(False)
         self._attr_status_label.setText("No annotation selected")
 
     def _set_tristate_checkbox(self, checkbox, values):
@@ -759,8 +759,8 @@ class SAMWidget(QWidget):
         if selected:
             layer.features.loc[selected, attr_name] = value
 
-    def _review_selected(self):
-        """Mark selected annotations as reviewed."""
+    def _accept_selected(self):
+        """Mark selected annotations as accepted."""
         output_name = self._shapes_layer_selection.currentText()
         if not output_name:
             return
@@ -778,8 +778,8 @@ class SAMWidget(QWidget):
         layer.features.loc[selected, "reviewed_at"] = now
         self._on_output_selection_changed()
 
-    def _review_all(self):
-        """Mark all annotations as reviewed."""
+    def _accept_all(self):
+        """Mark all annotations as accepted."""
         output_name = self._shapes_layer_selection.currentText()
         if not output_name:
             return
@@ -795,7 +795,7 @@ class SAMWidget(QWidget):
         layer.features["review_status"] = "approved"
         layer.features["reviewed_at"] = now
         self._on_output_selection_changed()
-        print(f"Reviewed all {len(layer.features)} annotations")
+        print(f"Accepted all {len(layer.features)} annotations")
 
     # --- Class Management Methods ---
 
