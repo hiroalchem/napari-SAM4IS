@@ -195,7 +195,10 @@ def create_json(
 
 
 def load_json(json_path):
-    """Load COCO JSON and return parsed annotations.
+    """Load single-image COCO JSON and return parsed annotations.
+
+    Only single-image COCO files are supported (as produced by
+    this plugin's Save function). Multi-image files are rejected.
 
     Returns:
         dict with keys:
@@ -208,7 +211,13 @@ def load_json(json_path):
     with open(json_path) as f:
         coco = json.load(f)
 
-    image_info = coco["images"][0] if coco.get("images") else {}
+    images = coco.get("images", [])
+    if len(images) > 1:
+        raise ValueError(
+            f"Multi-image COCO files are not supported "
+            f"({len(images)} images found)"
+        )
+    image_info = images[0] if images else {}
     categories = coco.get("categories", [])
 
     parsed = []
@@ -242,6 +251,15 @@ def load_json(json_path):
         sub_polygons = []
         for sub in seg:
             if not isinstance(sub, list) or len(sub) < 6:
+                continue
+            if len(sub) % 2 != 0:
+                logger.warning(
+                    "Skipping sub-polygon in annotation "
+                    "(id=%s, index=%d): odd coordinate count %d",
+                    ann_id,
+                    i,
+                    len(sub),
+                )
                 continue
             coords = np.array(sub[::-1], dtype=float).reshape(-1, 2)
             sub_polygons.append(coords)

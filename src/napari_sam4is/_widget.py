@@ -1542,7 +1542,7 @@ class SAMWidget(QWidget):
         """
         try:
             result = load_json(json_path)
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             print(f"Failed to load JSON: {e}")
             return False
 

@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import numpy as np
+import pytest
 
 from napari_sam4is import SAMWidget
 from napari_sam4is._utils import (
@@ -513,5 +514,67 @@ def test_features_none_mixed_in():
             loaded[1]["attributes"]["reviewed_at"]
             == "2026-02-13T10:00:00+09:00"
         )
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_load_json_multi_image_rejected():
+    """Test multi-image COCO files are rejected."""
+    coco = {
+        "images": [
+            {"file_name": "a.png", "height": 100, "width": 100, "id": 0},
+            {"file_name": "b.png", "height": 100, "width": 100, "id": 1},
+        ],
+        "annotations": [],
+        "categories": [],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        with pytest.raises(ValueError, match="Multi-image"):
+            load_json(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_load_json_odd_coords_skipped():
+    """Test polygon with odd coordinate count is skipped."""
+    coco = {
+        "images": [
+            {
+                "file_name": "test.png",
+                "height": 100,
+                "width": 100,
+                "id": 0,
+            }
+        ],
+        "annotations": [
+            {
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "segmentation": [[10, 20, 30, 40, 50, 60, 70]],
+                "area": 100,
+                "bbox": [10, 10, 10, 10],
+                "iscrowd": 0,
+            }
+        ],
+        "categories": [],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        json.dump(coco, f)
+        tmp_path = f.name
+
+    try:
+        result = load_json(tmp_path)
+        assert len(result["annotations"]) == 0
     finally:
         os.unlink(tmp_path)
