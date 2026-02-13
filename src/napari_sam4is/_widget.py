@@ -219,13 +219,11 @@ class SAMWidget(QWidget):
         self._attr_layout = QVBoxLayout()
 
         self._unclear_checkbox = QCheckBox("Unclear boundary")
-        self._unclear_checkbox.setTristate(True)
         self._unclear_checkbox.setEnabled(False)
         self._unclear_checkbox.stateChanged.connect(self._on_unclear_toggled)
         self._attr_layout.addWidget(self._unclear_checkbox)
 
         self._uncertain_checkbox = QCheckBox("Uncertain class")
-        self._uncertain_checkbox.setTristate(True)
         self._uncertain_checkbox.setEnabled(False)
         self._uncertain_checkbox.stateChanged.connect(
             self._on_uncertain_toggled
@@ -560,6 +558,19 @@ class SAMWidget(QWidget):
 
     # --- Features DataFrame Helpers ---
 
+    def _has_text_set(self, layer):
+        """Check if layer already has a non-empty text template."""
+        if not hasattr(layer, "text") or layer.text is None:
+            return False
+        try:
+            s = layer.text.string
+            const = getattr(s, "constant", None)
+            if const is not None:
+                return bool(str(const))
+            return bool(s)
+        except (AttributeError, TypeError):
+            return False
+
     def _ensure_features_columns(self, layer):
         """Ensure output shapes layer has all required columns."""
         features = layer.features
@@ -679,6 +690,29 @@ class SAMWidget(QWidget):
                 f"Status: {status_text} ({len(selected)} selected)"
             )
 
+        # Sync class list selection
+        self._sync_class_list_to_selection(features, selected)
+
+    def _sync_class_list_to_selection(self, features, selected):
+        """Sync class list widget to match selected polygon(s)."""
+        if len(selected) == 1:
+            target = features.at[selected[0], "class"]
+        else:
+            class_vals = features.loc[selected, "class"].unique()
+            target = class_vals[0] if len(class_vals) == 1 else None
+
+        if target is not None:
+            matched = False
+            for i in range(self._class_list_widget.count()):
+                if self._class_list_widget.item(i).text() == target:
+                    self._class_list_widget.setCurrentRow(i)
+                    matched = True
+                    break
+            if not matched:
+                self._class_list_widget.clearSelection()
+        else:
+            self._class_list_widget.clearSelection()
+
     def _set_attr_ui_disabled(self):
         """Disable attribute UI when no selection."""
         self._unclear_checkbox.blockSignals(True)
@@ -719,30 +753,18 @@ class SAMWidget(QWidget):
 
     def _on_unclear_toggled(self, state):
         """Handle unclear checkbox toggle."""
-        if state == Qt.PartiallyChecked:
-            self._unclear_checkbox.blockSignals(True)
-            self._unclear_checkbox.setCheckState(Qt.Checked)
-            self._unclear_checkbox.blockSignals(False)
-            state = Qt.Checked
-
         if self._updating_attr_ui:
             return
-
-        value = state == Qt.Checked
+        # Use int() to handle PySide6 int/enum mismatch
+        value = int(state) != 0
         self._set_selected_attr("unclear", value)
 
     def _on_uncertain_toggled(self, state):
         """Handle uncertain checkbox toggle."""
-        if state == Qt.PartiallyChecked:
-            self._uncertain_checkbox.blockSignals(True)
-            self._uncertain_checkbox.setCheckState(Qt.Checked)
-            self._uncertain_checkbox.blockSignals(False)
-            state = Qt.Checked
-
         if self._updating_attr_ui:
             return
-
-        value = state == Qt.Checked
+        # Use int() to handle PySide6 int/enum mismatch
+        value = int(state) != 0
         self._set_selected_attr("uncertain", value)
 
     def _set_selected_attr(self, attr_name, value):
@@ -757,7 +779,13 @@ class SAMWidget(QWidget):
         self._ensure_features_columns(layer)
         selected = list(layer.selected_data)
         if selected:
-            layer.features.loc[selected, attr_name] = value
+            features = layer.features.copy()
+            features.loc[selected, attr_name] = value
+            self._updating_attr_ui = True
+            try:
+                layer.features = features
+            finally:
+                self._updating_attr_ui = False
 
     def _accept_selected(self):
         """Mark selected annotations as accepted."""
@@ -774,8 +802,14 @@ class SAMWidget(QWidget):
             return
 
         now = datetime.now().astimezone().isoformat()
-        layer.features.loc[selected, "review_status"] = "approved"
-        layer.features.loc[selected, "reviewed_at"] = now
+        features = layer.features.copy()
+        features.loc[selected, "review_status"] = "approved"
+        features.loc[selected, "reviewed_at"] = now
+        self._updating_attr_ui = True
+        try:
+            layer.features = features
+        finally:
+            self._updating_attr_ui = False
         self._on_output_selection_changed()
 
     def _accept_all(self):
@@ -792,8 +826,14 @@ class SAMWidget(QWidget):
             return
 
         now = datetime.now().astimezone().isoformat()
-        layer.features["review_status"] = "approved"
-        layer.features["reviewed_at"] = now
+        features = layer.features.copy()
+        features["review_status"] = "approved"
+        features["reviewed_at"] = now
+        self._updating_attr_ui = True
+        try:
+            layer.features = features
+        finally:
+            self._updating_attr_ui = False
         self._on_output_selection_changed()
         print(f"Accepted all {len(layer.features)} annotations")
 
@@ -818,7 +858,13 @@ class SAMWidget(QWidget):
                     output_layer.feature_defaults["class"] = class_name
                     idxs = list(output_layer.selected_data)
                     if idxs:
-                        output_layer.features.loc[idxs, "class"] = class_name
+                        features = output_layer.features.copy()
+                        features.loc[idxs, "class"] = class_name
+                        self._updating_attr_ui = True
+                        try:
+                            output_layer.features = features
+                        finally:
+                            self._updating_attr_ui = False
                         output_layer.refresh_text()
 
     def _add_class(self):
@@ -1291,11 +1337,7 @@ class SAMWidget(QWidget):
                 ):
                     # Initialize features/text if needed
                     self._ensure_features_columns(output_layer)
-                    has_text = (
-                        hasattr(output_layer, "text")
-                        and output_layer.text.string
-                    )
-                    if not has_text:
+                    if not self._has_text_set(output_layer):
                         output_layer.text = {
                             "string": "{class}",
                             "anchor": "upper_left",
@@ -1594,8 +1636,7 @@ class SAMWidget(QWidget):
 
         self._ensure_features_columns(output_layer)
 
-        has_text = hasattr(output_layer, "text") and output_layer.text.string
-        if not has_text:
+        if not self._has_text_set(output_layer):
             output_layer.text = {
                 "string": "{class}",
                 "anchor": "upper_left",
