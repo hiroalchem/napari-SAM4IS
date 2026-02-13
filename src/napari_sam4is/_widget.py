@@ -492,7 +492,8 @@ class SAMWidget(QWidget):
         # Store current selections
         current_image = self._image_layer_selection.currentText()
 
-        # Update image layer selection
+        # Block signals to prevent cascading updates during refresh
+        self._image_layer_selection.blockSignals(True)
         self._image_layer_selection.clear()
         image_layers = [
             layer.name
@@ -504,6 +505,13 @@ class SAMWidget(QWidget):
         # Restore selection if layer still exists
         if current_image in image_layers:
             self._image_layer_selection.setCurrentText(current_image)
+        self._image_layer_selection.blockSignals(False)
+
+        # If effective selection changed while signals were blocked,
+        # manually invoke handler to update widget state.
+        new_image = self._image_layer_selection.currentText()
+        if new_image != current_image and new_image:
+            self._on_image_layer_changed()
 
         # Update shapes and labels selections via radio button toggle
         self._on_radio_btn_toggled()
@@ -518,6 +526,7 @@ class SAMWidget(QWidget):
             current_labels = self._labels_layer_selection.currentText()
 
             if button_id == 0:
+                self._shapes_layer_selection.blockSignals(True)
                 self._shapes_layer_selection.clear()
                 shape_layers = [
                     layer.name
@@ -530,13 +539,21 @@ class SAMWidget(QWidget):
                 # Restore selection if layer still exists
                 if current_shapes in shape_layers:
                     self._shapes_layer_selection.setCurrentText(current_shapes)
+                self._shapes_layer_selection.blockSignals(False)
+                # Fire once after rebuild
+                self._on_shapes_layer_combo_changed(
+                    self._shapes_layer_selection.currentText()
+                )
 
+                self._labels_layer_selection.blockSignals(True)
                 self._labels_layer_selection.clear()
+                self._labels_layer_selection.blockSignals(False)
                 self._save_btn.setEnabled(True)
                 self.check_box.setEnabled(False)
                 self.check_box.setStyleSheet("text-decoration: line-through")
 
             else:
+                self._labels_layer_selection.blockSignals(True)
                 self._labels_layer_selection.clear()
                 label_layers = [
                     layer.name
@@ -549,8 +566,12 @@ class SAMWidget(QWidget):
                 # Restore selection if layer still exists
                 if current_labels in label_layers:
                     self._labels_layer_selection.setCurrentText(current_labels)
+                self._labels_layer_selection.blockSignals(False)
 
+                self._shapes_layer_selection.blockSignals(True)
                 self._shapes_layer_selection.clear()
+                self._shapes_layer_selection.blockSignals(False)
+                self._on_shapes_layer_combo_changed("")
                 self._save_btn.setEnabled(False)
                 self.check_box.setEnabled(True)
                 self.check_box.setStyleSheet("text-decoration: none")
