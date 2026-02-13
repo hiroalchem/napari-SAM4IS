@@ -1572,7 +1572,12 @@ class SAMWidget(QWidget):
             print("Image layer not found or was renamed")
             return False
 
-        image_path = image_layer.source.path
+        image_path = getattr(
+            getattr(image_layer, "source", None), "path", None
+        )
+        if not image_path:
+            print("Image layer has no file path")
+            return False
         image_name = os.path.basename(image_path)
         output_layer = self._get_layer_by_name_safe(
             self._shapes_layer_selection.currentText()
@@ -1649,6 +1654,13 @@ class SAMWidget(QWidget):
 
     def _on_load_annotations_clicked(self):
         """Handle Load Annotations button click."""
+        if self._radio_btn_group.checkedId() != 0:
+            QMessageBox.warning(
+                self,
+                "Cannot load annotations",
+                "Annotation loading is only supported " "in instance mode.",
+            )
+            return
         fname, _ = QFileDialog.getOpenFileName(
             self,
             "Load annotations JSON",
@@ -1695,7 +1707,13 @@ class SAMWidget(QWidget):
         if len(output_layer.data) > 0:
             return
 
-        self._load_annotations(json_path, output_layer, needs_replace=False)
+        if not self._load_annotations(
+            json_path, output_layer, needs_replace=False
+        ):
+            print(
+                f"Warning: auto-load failed for "
+                f"{os.path.basename(json_path)}"
+            )
 
     def _load_annotations_with_confirm(self, json_path):
         """Load annotations, asking to replace if shapes exist.
@@ -1737,7 +1755,13 @@ class SAMWidget(QWidget):
         """
         try:
             result = load_json(json_path)
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as e:
             print(f"Failed to load JSON: {e}")
             return False
 
@@ -1784,7 +1808,10 @@ class SAMWidget(QWidget):
         for i in range(self._class_list_widget.count()):
             text = self._class_list_widget.item(i).text()
             parts = text.split(": ", 1)
-            cid = int(parts[0].strip())
+            try:
+                cid = int(parts[0].strip())
+            except (ValueError, TypeError):
+                continue
             cat_id_to_str[cid] = text
 
         self._ensure_features_columns(output_layer)

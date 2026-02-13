@@ -261,7 +261,17 @@ def load_json(json_path):
                     len(sub),
                 )
                 continue
-            coords = np.array(sub[::-1], dtype=float).reshape(-1, 2)
+            try:
+                coords = np.array(sub[::-1], dtype=float).reshape(-1, 2)
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Skipping sub-polygon in annotation "
+                    "(id=%s, index=%d): %s",
+                    ann_id,
+                    i,
+                    exc,
+                )
+                continue
             sub_polygons.append(coords)
 
         if len(sub_polygons) > 1:
