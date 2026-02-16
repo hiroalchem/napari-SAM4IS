@@ -27,18 +27,18 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.23.0,<2.0",
-    "magicgui>=0.8.0,<1.0",
-    "qtpy>=2.4.0,<3.0",
-    "torch>=2.0.0,<3.0",
-    "torchvision>=0.15.0,<1.0",
-    "scikit-image>=0.21.0,<1.0",
-    "napari>=0.4.19,<0.7.0",
+    "numpy>=1.23.0",
+    "magicgui>=0.8.0",
+    "qtpy>=2.4.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "scikit-image>=0.21.0",
+    "napari>=0.4.19",
     "PySide6",
-    "requests>=2.31.0,<3.0",
-    "urllib3>=2.0.0,<3.0",
-    "Pillow>=10.0.0,<11.0",
-    "pyyaml>=6.0,<7.0",
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
+    "Pillow>=10.0.0",
+    "pyyaml>=6.0",
 ]
 
 [project.urls]
