@@ -1,5 +1,7 @@
 # napari-SAM4IS
 
+[English](README.md) | [日本語](README.ja.md)
+
 [![License Apache Software License 2.0](https://img.shields.io/pypi/l/napari-SAM4IS.svg?color=green)](https://github.com/hiroalchem/napari-SAM4IS/raw/main/LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/napari-SAM4IS.svg?color=green)](https://pypi.org/project/napari-SAM4IS)
 [![Python Version](https://img.shields.io/pypi/pyversions/napari-SAM4IS.svg?color=green)](https://python.org)
@@ -74,7 +76,7 @@ For more detailed instructions, please refer to the [SAM installation guide](htt
 2. Upon launching the plugin, several layers will be automatically created: SAM-Box, SAM-Positive, SAM-Negative, SAM-Predict, and Accepted. The usage of these layers will be explained later.
 3. Choose between local model or API mode:
    - **Local Model Mode**: Select the model you want to use and click the load button. (The default option is recommended.)
-   - **API Mode**: Check the "Use API" checkbox, then enter your API URL and API Key. No model loading is required.
+   - **API Mode**: Check the "Use API" checkbox, then enter your API URL and API Key. No model loading is required. This mode is designed to work with the SAM API provided by [LPIXEL Inc.](https://lpixel.net/) via [IMACEL](https://imacel.net/). For API access, please contact [IMACEL](https://imacel.net/contact) directly.
 4. Next, select the image layer you want to annotate.
 5. Then, select whether you want to do instance segmentation or semantic segmentation. (Note that for 3D images, semantic segmentation should be chosen in the current version.)
 6. Finally, select the output layer as "shapes" for instance segmentation or "labels" for semantic segmentation. (For instance segmentation, the "Accept" layer can also be used.)
@@ -118,12 +120,12 @@ You can also annotate without using SAM by enabling **Manual Mode**.
 Each annotation can have additional attributes to support quality control workflows.
 
 1. Select one or more annotations in the output Shapes layer.
-2. In the **Attributes** panel, you can set:
-   - **Unclear**: Mark annotations where the object boundary is ambiguous.
-   - **Uncertain**: Mark annotations where the object class is uncertain.
-   - **Reviewed at**: Automatically records a timestamp when an annotation is reviewed. Click **Mark reviewed** to set, or **Clear** to reset.
-3. Attributes are saved as part of the COCO JSON output under each annotation's `"attributes"` field.
-4. When multiple annotations are selected with mixed attribute values, checkboxes show a mixed state indicator.
+2. In the **Annotation Attributes** panel, you can set:
+   - **Unclear boundary**: Mark annotations where the object boundary is ambiguous.
+   - **Uncertain class**: Mark annotations where the object class is uncertain.
+3. Click **Accept Selected** to mark the selected annotations as reviewed (sets status to "approved" with a timestamp), or **Accept All** to review all annotations at once.
+4. Attributes are saved as part of the COCO JSON output under each annotation's `"attributes"` field.
+5. When multiple annotations are selected with mixed attribute values, checkboxes show a mixed state indicator.
 
 ### Saving and Loading Annotations
 1. If you have output to the labels layer, use napari's standard functionality to save the mask.
