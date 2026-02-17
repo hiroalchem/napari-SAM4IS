@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-SAM4IS"
-version = "0.1.4"
+version = "0.1.5"
 description = "Create annotations for instance segmentation using Segment Anything models"
 readme = "README.md"
 license = "Apache-2.0"
@@ -34,7 +34,6 @@ dependencies = [
     "torchvision>=0.15.0",
     "scikit-image>=0.21.0",
     "napari>=0.4.19",
-    "PySide6",
     "requests>=2.31.0",
     "urllib3>=2.0.0",
     "Pillow>=10.0.0",

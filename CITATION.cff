@@ -18,4 +18,4 @@ abstract: >-
   napari plugin for instance and semantic segmentation
   annotation using Segment Anything Model (SAM)
 license: Apache-2.0
-version: 0.1.4
+version: 0.1.5
