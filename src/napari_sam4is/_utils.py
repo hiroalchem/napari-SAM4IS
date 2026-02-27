@@ -208,7 +208,7 @@ def load_json(json_path):
             "attributes": dict or None
         - "image_info": dict with "file_name", "height", "width"
     """
-    with open(json_path) as f:
+    with open(json_path, encoding="utf-8") as f:
         coco = json.load(f)
 
     images = coco.get("images", [])

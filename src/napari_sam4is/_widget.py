@@ -993,7 +993,7 @@ class SAMWidget(QWidget):
         )
         if not fname:
             return
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict) or "names" not in data:
             print("Invalid class file format")
@@ -1064,8 +1064,13 @@ class SAMWidget(QWidget):
         if names:
             class_data = {"names": names}
             path = os.path.join(directory, "class.yaml")
-            with open(path, "w") as f:
-                yaml.dump(class_data, f, default_flow_style=False)
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    class_data,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                )
 
     def _load_model(self):
         if self._use_api_checkbox.isChecked():
@@ -1643,8 +1648,8 @@ class SAMWidget(QWidget):
             category_ids=category_ids,
             attributes_list=attributes_list,
         )
-        with open(output_path, "w") as f:
-            json.dump(data, f)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
 
         self._save_class_yaml(os.path.dirname(image_path))
         print("saved")
