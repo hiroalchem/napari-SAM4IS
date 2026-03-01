@@ -90,10 +90,10 @@ if _os.path.isfile(_NOTO_TTF):
 
 # ----------------------
 
-from collections.abc import Collection
+from collections.abc import Collection  # noqa: E402
 
-from napari.layers.shapes.shapes import Shapes
-from napari.utils.events.containers import Selection
+from napari.layers.shapes.shapes import Shapes  # noqa: E402
+from napari.utils.events.containers import Selection  # noqa: E402
 
 # Add replace_selection to Selection class if missing (version guard)
 if not hasattr(Selection, "replace_selection"):
