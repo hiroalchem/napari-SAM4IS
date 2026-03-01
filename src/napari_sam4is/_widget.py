@@ -22,11 +22,12 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -186,7 +187,8 @@ class SAMWidget(QWidget):
         self._class_group = QGroupBox("Class Management")
         self._class_layout = QVBoxLayout()
 
-        self._class_list_widget = QListWidget()
+        self._class_list_widget = QTreeWidget()
+        self._class_list_widget.setHeaderLabels(["Class"])
         self._class_list_widget.setSelectionMode(
             QAbstractItemView.SingleSelection
         )
@@ -201,6 +203,9 @@ class SAMWidget(QWidget):
         self._add_class_btn = QPushButton("Add")
         self._add_class_btn.clicked.connect(self._add_class)
         self._class_input_layout.addWidget(self._add_class_btn)
+        self._add_subclass_btn = QPushButton("Add Sub")
+        self._add_subclass_btn.clicked.connect(self._add_subclass)
+        self._class_input_layout.addWidget(self._add_subclass_btn)
         self._class_layout.addLayout(self._class_input_layout)
 
         self._class_btn_layout = QHBoxLayout()
@@ -714,7 +719,7 @@ class SAMWidget(QWidget):
         self._sync_class_list_to_selection(features, selected)
 
     def _sync_class_list_to_selection(self, features, selected):
-        """Sync class list widget to match selected polygon(s)."""
+        """Sync class tree widget to match selected polygon(s)."""
         if len(selected) == 1:
             target = features.at[selected[0], "class"]
         else:
@@ -723,9 +728,10 @@ class SAMWidget(QWidget):
 
         if target is not None:
             matched = False
-            for i in range(self._class_list_widget.count()):
-                if self._class_list_widget.item(i).text() == target:
-                    self._class_list_widget.setCurrentRow(i)
+            for item in self._iter_all_tree_items():
+                class_str = self._get_item_class_string(item)
+                if class_str == target:
+                    self._class_list_widget.setCurrentItem(item)
                     matched = True
                     break
             if not matched:
@@ -863,14 +869,96 @@ class SAMWidget(QWidget):
         self._on_output_selection_changed()
         print(f"Accepted all {len(layer.features)} annotations")
 
+    # --- Class Hierarchy Helper Methods ---
+
+    _CLASS_SEPARATOR = "-"
+
+    def _iter_all_tree_items(self):
+        """Iterate all items in the class tree (depth-first)."""
+        stack = []
+        for i in range(self._class_list_widget.topLevelItemCount() - 1, -1, -1):
+            stack.append(self._class_list_widget.topLevelItem(i))
+        while stack:
+            item = stack.pop()
+            yield item
+            for i in range(item.childCount() - 1, -1, -1):
+                stack.append(item.child(i))
+
+    def _get_all_class_ids(self):
+        """Return list of all class IDs in the tree."""
+        ids = []
+        for item in self._iter_all_tree_items():
+            text = item.text(0)
+            try:
+                ids.append(int(text.split(":")[0].strip()))
+            except (ValueError, IndexError):
+                pass
+        return ids
+
+    def _get_item_local_name(self, item):
+        """Get the local name (without ID prefix) from a tree item."""
+        text = item.text(0)
+        if ": " in text:
+            return text.split(": ", 1)[1]
+        return text
+
+    def _get_item_path(self, item):
+        """Compute full hierarchical path for a tree item.
+
+        Example: for item "Persian" under "Cat" under "Animal",
+        returns "Animal-Cat-Persian".
+        """
+        parts = []
+        current = item
+        while current is not None:
+            parts.append(self._get_item_local_name(current))
+            current = current.parent()
+        parts.reverse()
+        return self._CLASS_SEPARATOR.join(parts)
+
+    def _get_item_class_string(self, item):
+        """Get the full class string 'id: path' for a tree item."""
+        text = item.text(0)
+        try:
+            class_id = int(text.split(":")[0].strip())
+        except (ValueError, IndexError):
+            class_id = 0
+        path = self._get_item_path(item)
+        return f"{class_id}: {path}"
+
+    def _get_item_id(self, item):
+        """Get the numeric class ID from a tree item."""
+        text = item.text(0)
+        try:
+            return int(text.split(":")[0].strip())
+        except (ValueError, IndexError):
+            return 0
+
+    def _tree_item_count(self):
+        """Return total number of items in the tree (all levels)."""
+        return sum(1 for _ in self._iter_all_tree_items())
+
+    def _find_tree_item_by_class_string(self, class_str):
+        """Find a tree item matching the given class string."""
+        for item in self._iter_all_tree_items():
+            if self._get_item_class_string(item) == class_str:
+                return item
+        return None
+
+    def _get_first_tree_item(self):
+        """Return the first item in the tree, or None."""
+        if self._class_list_widget.topLevelItemCount() > 0:
+            return self._class_list_widget.topLevelItem(0)
+        return None
+
     # --- Class Management Methods ---
 
     def _on_class_clicked(self):
-        """Handle class selection in the class list widget."""
+        """Handle class selection in the class tree widget."""
         selected_items = self._class_list_widget.selectedItems()
         if not selected_items:
             return
-        class_name = selected_items[0].text()
+        class_name = self._get_item_class_string(selected_items[0])
 
         button_id = self._radio_btn_group.checkedId()
         if button_id == 0:
@@ -894,40 +982,89 @@ class SAMWidget(QWidget):
                         output_layer.refresh_text()
 
     def _add_class(self):
-        """Add a new class to the class list."""
+        """Add a new top-level class to the class tree."""
         class_name = self._class_name_input.text().strip()
         if not class_name:
             return
 
-        existing = [
-            self._class_list_widget.item(i).text()
-            for i in range(self._class_list_widget.count())
-        ]
-        existing_names = [
-            name.split(": ", 1)[1] for name in existing if ": " in name
-        ]
-        if class_name in existing_names:
-            print("Class already exists")
+        if self._CLASS_SEPARATOR in class_name:
+            print(
+                f"Class name cannot contain '{self._CLASS_SEPARATOR}' "
+                f"(reserved as hierarchy separator)"
+            )
             return
 
-        if existing:
-            numbers = [int(n.split(":")[0]) for n in existing]
-            next_id = find_missing_class_number(numbers)
-        else:
-            next_id = 0
+        # Check for duplicate top-level names
+        for i in range(self._class_list_widget.topLevelItemCount()):
+            existing_name = self._get_item_local_name(
+                self._class_list_widget.topLevelItem(i)
+            )
+            if existing_name == class_name:
+                print("Class already exists")
+                return
 
-        formatted = f"{next_id}: {class_name}"
-        self._class_list_widget.addItem(formatted)
-        self._sort_class_list()
+        ids = self._get_all_class_ids()
+        next_id = find_missing_class_number(ids)
+
+        item = QTreeWidgetItem([f"{next_id}: {class_name}"])
+        self._class_list_widget.addTopLevelItem(item)
+        self._sort_class_tree()
+        self._class_name_input.clear()
+
+    def _add_subclass(self):
+        """Add a subclass under the currently selected class."""
+        class_name = self._class_name_input.text().strip()
+        if not class_name:
+            return
+
+        if self._CLASS_SEPARATOR in class_name:
+            print(
+                f"Class name cannot contain '{self._CLASS_SEPARATOR}' "
+                f"(reserved as hierarchy separator)"
+            )
+            return
+
+        selected_items = self._class_list_widget.selectedItems()
+        if not selected_items:
+            print("Select a parent class first")
+            return
+
+        parent_item = selected_items[0]
+
+        # Check for duplicate sibling names
+        for i in range(parent_item.childCount()):
+            existing_name = self._get_item_local_name(parent_item.child(i))
+            if existing_name == class_name:
+                print("Subclass already exists under this parent")
+                return
+
+        ids = self._get_all_class_ids()
+        next_id = find_missing_class_number(ids)
+
+        child_item = QTreeWidgetItem([f"{next_id}: {class_name}"])
+        parent_item.addChild(child_item)
+        parent_item.setExpanded(True)
         self._class_name_input.clear()
 
     def _del_class(self):
-        """Delete the selected class (blocked if in use)."""
+        """Delete the selected class (blocked if in use or has children)."""
         selected_items = self._class_list_widget.selectedItems()
         if not selected_items:
             return
 
-        class_text = selected_items[0].text()
+        item = selected_items[0]
+
+        # Block deletion if item has children
+        if item.childCount() > 0:
+            QMessageBox.warning(
+                self,
+                "Cannot delete",
+                "Cannot delete a class that has subclasses. "
+                "Delete subclasses first.",
+            )
+            return
+
+        class_text = self._get_item_class_string(item)
 
         # Check if class is in use in the output shapes layer
         button_id = self._radio_btn_group.checkedId()
@@ -966,22 +1103,18 @@ class SAMWidget(QWidget):
             )
             return
 
-        self._class_list_widget.takeItem(
-            self._class_list_widget.row(selected_items[0])
-        )
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            idx = self._class_list_widget.indexOfTopLevelItem(item)
+            self._class_list_widget.takeTopLevelItem(idx)
 
-    def _sort_class_list(self):
-        """Sort class list items by numeric ID prefix."""
-        items = [
-            self._class_list_widget.item(i).text()
-            for i in range(self._class_list_widget.count())
-        ]
-        sorted_items = sorted(
-            items, key=lambda x: int(x.split(":")[0].strip())
+    def _sort_class_tree(self):
+        """Sort top-level tree items by numeric ID prefix."""
+        self._class_list_widget.sortItems(
+            0, Qt.AscendingOrder
         )
-        self._class_list_widget.clear()
-        for item_text in sorted_items:
-            self._class_list_widget.addItem(item_text)
 
     def _load_classes(self):
         """Load class definitions from a YAML file."""
@@ -995,29 +1128,64 @@ class SAMWidget(QWidget):
             return
         with open(fname, encoding="utf-8") as f:
             data = yaml.safe_load(f)
-        if not isinstance(data, dict) or "names" not in data:
+        if not isinstance(data, dict):
             print("Invalid class file format")
             return
+
         self._class_list_widget.clear()
-        for key, value in data["names"].items():
+
+        if "hierarchy" in data:
+            self._load_hierarchy_from_dict(
+                data["hierarchy"], None
+            )
+        elif "names" in data:
+            # Backward compatibility: flat format
+            for key, value in data["names"].items():
+                class_id = int(key)
+                class_name = str(value).strip()
+                item = QTreeWidgetItem([f"{class_id}: {class_name}"])
+                self._class_list_widget.addTopLevelItem(item)
+        else:
+            print("Invalid class file format")
+            return
+        self._sort_class_tree()
+
+    def _load_hierarchy_from_dict(self, hierarchy_dict, parent_item):
+        """Recursively load class hierarchy from dict into tree."""
+        for key, value in hierarchy_dict.items():
             class_id = int(key)
-            class_name = str(value).strip()
-            self._class_list_widget.addItem(f"{class_id}: {class_name}")
-        self._sort_class_list()
+            if isinstance(value, dict):
+                class_name = str(value.get("name", "")).strip()
+                children = value.get("children", {})
+            else:
+                class_name = str(value).strip()
+                children = {}
+
+            item = QTreeWidgetItem([f"{class_id}: {class_name}"])
+            if parent_item is None:
+                self._class_list_widget.addTopLevelItem(item)
+            else:
+                parent_item.addChild(item)
+
+            if children:
+                self._load_hierarchy_from_dict(children, item)
+                item.setExpanded(True)
 
     def _get_selected_class(self):
-        """Return currently selected class string.
+        """Return currently selected class string (id: full_path).
 
         Falls back to first item, or auto-creates
-        '0: object' if list is empty.
+        '0: object' if tree is empty.
         """
         selected = self._class_list_widget.selectedItems()
         if selected:
-            return selected[0].text()
-        if self._class_list_widget.count() > 0:
-            return self._class_list_widget.item(0).text()
+            return self._get_item_class_string(selected[0])
+        first = self._get_first_tree_item()
+        if first is not None:
+            return self._get_item_class_string(first)
         # Auto-create default class
-        self._class_list_widget.addItem("0: object")
+        item = QTreeWidgetItem(["0: object"])
+        self._class_list_widget.addTopLevelItem(item)
         return "0: object"
 
     def _get_selected_class_id(self):
@@ -1028,18 +1196,25 @@ class SAMWidget(QWidget):
         return 0
 
     def _build_categories_list(self):
-        """Build COCO categories list from class list."""
+        """Build COCO categories list from class tree.
+
+        Each category includes a supercategory field that encodes
+        the parent path for hierarchy reconstruction.
+        """
         categories = []
-        for i in range(self._class_list_widget.count()):
-            text = self._class_list_widget.item(i).text()
-            parts = text.split(": ", 1)
-            cat_id = int(parts[0].strip())
-            cat_name = parts[1].strip() if len(parts) > 1 else "object"
+        for item in self._iter_all_tree_items():
+            cat_id = self._get_item_id(item)
+            cat_name = self._get_item_path(item)
+            parent = item.parent()
+            if parent is not None:
+                supercategory = self._get_item_path(parent)
+            else:
+                supercategory = ""
             categories.append(
                 {
                     "id": cat_id,
                     "name": cat_name,
-                    "supercategory": cat_name,
+                    "supercategory": supercategory,
                 }
             )
         if not categories:
@@ -1047,22 +1222,40 @@ class SAMWidget(QWidget):
                 {
                     "id": 0,
                     "name": "object",
-                    "supercategory": "object",
+                    "supercategory": "",
                 }
             ]
         return categories
 
     def _save_class_yaml(self, directory):
-        """Save class definitions to class.yaml."""
-        names = {}
-        for i in range(self._class_list_widget.count()):
-            text = self._class_list_widget.item(i).text()
-            parts = text.split(": ", 1)
-            cat_id = int(parts[0].strip())
-            cat_name = parts[1].strip() if len(parts) > 1 else ""
-            names[cat_id] = cat_name
-        if names:
-            class_data = {"names": names}
+        """Save class definitions to class.yaml with hierarchy."""
+
+        def _build_hierarchy(parent_item):
+            count = (
+                parent_item.childCount()
+                if parent_item is not None
+                else self._class_list_widget.topLevelItemCount()
+            )
+            result = {}
+            for i in range(count):
+                if parent_item is not None:
+                    child = parent_item.child(i)
+                else:
+                    child = self._class_list_widget.topLevelItem(i)
+                cat_id = self._get_item_id(child)
+                local_name = self._get_item_local_name(child)
+                if child.childCount() > 0:
+                    result[cat_id] = {
+                        "name": local_name,
+                        "children": _build_hierarchy(child),
+                    }
+                else:
+                    result[cat_id] = local_name
+            return result
+
+        hierarchy = _build_hierarchy(None)
+        if hierarchy:
+            class_data = {"hierarchy": hierarchy}
             path = os.path.join(directory, "class.yaml")
             with open(path, "w", encoding="utf-8") as f:
                 yaml.dump(
@@ -1071,6 +1264,48 @@ class SAMWidget(QWidget):
                     default_flow_style=False,
                     allow_unicode=True,
                 )
+
+    def _restore_categories_to_tree(self, categories):
+        """Rebuild class tree from COCO categories list.
+
+        Uses the supercategory field to reconstruct the hierarchy.
+        Categories with empty supercategory are top-level.
+        Categories whose name contains the separator are treated
+        as hierarchical paths.
+        """
+        sep = self._CLASS_SEPARATOR
+
+        # Build path → category mapping
+        # Sort by path depth so parents are created before children
+        sorted_cats = sorted(
+            categories, key=lambda c: c.get("name", "").count(sep)
+        )
+
+        path_to_item = {}
+        for cat in sorted_cats:
+            cat_id = cat.get("id", 0)
+            cat_name = cat.get("name", "object")
+            supercategory = cat.get("supercategory", "")
+
+            # Determine if this is a hierarchical name
+            if sep in cat_name:
+                parts = cat_name.rsplit(sep, 1)
+                parent_path = parts[0]
+                local_name = parts[1]
+            else:
+                parent_path = supercategory if supercategory else ""
+                local_name = cat_name
+
+            item = QTreeWidgetItem([f"{cat_id}: {local_name}"])
+
+            if parent_path and parent_path in path_to_item:
+                parent_item = path_to_item[parent_path]
+                parent_item.addChild(item)
+                parent_item.setExpanded(True)
+            else:
+                self._class_list_widget.addTopLevelItem(item)
+
+            path_to_item[cat_name] = item
 
     def _load_model(self):
         if self._use_api_checkbox.isChecked():
@@ -1799,25 +2034,17 @@ class SAMWidget(QWidget):
         if needs_replace:
             self._reset_output_layer(output_layer)
 
-        # Restore categories to class list
+        # Restore categories to class tree (with hierarchy)
         if categories:
             self._class_list_widget.clear()
-            for cat in categories:
-                cat_id = cat.get("id", 0)
-                cat_name = cat.get("name", "object")
-                self._class_list_widget.addItem(f"{cat_id}: {cat_name}")
-            self._sort_class_list()
+            self._restore_categories_to_tree(categories)
+            self._sort_class_tree()
 
         # Build category_id → class string mapping
         cat_id_to_str = {}
-        for i in range(self._class_list_widget.count()):
-            text = self._class_list_widget.item(i).text()
-            parts = text.split(": ", 1)
-            try:
-                cid = int(parts[0].strip())
-            except (ValueError, TypeError):
-                continue
-            cat_id_to_str[cid] = text
+        for item in self._iter_all_tree_items():
+            cid = self._get_item_id(item)
+            cat_id_to_str[cid] = self._get_item_class_string(item)
 
         self._ensure_features_columns(output_layer)
 
