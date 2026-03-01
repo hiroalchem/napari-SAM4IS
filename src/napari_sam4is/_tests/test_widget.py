@@ -4,6 +4,7 @@ import tempfile
 
 import numpy as np
 import pytest
+import yaml
 
 from napari_sam4is import SAMWidget
 from napari_sam4is._utils import (
@@ -576,5 +577,75 @@ def test_load_json_odd_coords_skipped():
     try:
         result = load_json(tmp_path)
         assert len(result["annotations"]) == 0
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_yaml_unicode_roundtrip():
+    """Test that Japanese class names survive YAML serialization."""
+    class_data = {"names": {0: "猫", 1: "犬", 2: "自転車"}}
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as f:
+        yaml.dump(
+            class_data,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
+        tmp_path = f.name
+
+    try:
+        with open(tmp_path, encoding="utf-8") as f:
+            loaded = yaml.safe_load(f)
+        assert loaded["names"][0] == "猫"
+        assert loaded["names"][1] == "犬"
+        assert loaded["names"][2] == "自転車"
+
+        # Verify raw file content contains actual characters, not escapes
+        with open(tmp_path, encoding="utf-8") as f:
+            raw = f.read()
+        assert "猫" in raw
+        assert "\\u" not in raw
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_json_unicode_roundtrip():
+    """Test that non-ASCII category names persist in COCO JSON."""
+    image = np.zeros((100, 100), dtype=np.uint8)
+    polygon = _make_polygon()
+    categories = [
+        {"id": 0, "name": "猫", "supercategory": "動物"},
+        {"id": 1, "name": "犬", "supercategory": "動物"},
+    ]
+
+    coco = create_json(
+        image,
+        "test.png",
+        [polygon],
+        categories=categories,
+        category_ids=[0],
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        json.dump(coco, f, ensure_ascii=False)
+        tmp_path = f.name
+
+    try:
+        with open(tmp_path, encoding="utf-8") as f:
+            loaded = json.load(f)
+        assert loaded["categories"][0]["name"] == "猫"
+        assert loaded["categories"][1]["name"] == "犬"
+        assert loaded["categories"][0]["supercategory"] == "動物"
+
+        # Verify raw file contains actual Unicode, not \uXXXX escapes
+        with open(tmp_path, encoding="utf-8") as f:
+            raw = f.read()
+        assert "猫" in raw
+        assert "\\u" not in raw
     finally:
         os.unlink(tmp_path)

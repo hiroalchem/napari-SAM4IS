@@ -26,9 +26,11 @@ def _patch_vispy_cjk_font():
     """Register NotoSansJP with vispy and wrap _load_glyph for CJK fallback."""
     try:
         import sys as _sys2
+
+        import vispy.util.fonts._triage  # noqa: F401
+
         # Import modules so they appear in sys.modules, then access via sys.modules
         import vispy.util.fonts._vispy_fonts  # noqa: F401
-        import vispy.util.fonts._triage  # noqa: F401
         _vf_mod = _sys2.modules["vispy.util.fonts._vispy_fonts"]
         _triage_mod = _sys2.modules["vispy.util.fonts._triage"]
 
@@ -72,9 +74,9 @@ def _patch_vispy_cjk_font():
             import vispy.visuals.text.text  # noqa: F401
             _text_mod = _sys2.modules["vispy.visuals.text.text"]
             _text_mod._load_glyph = _cjk_load_glyph
-        except Exception:
+        except (ImportError, KeyError, AttributeError):
             pass
-    except Exception as _e:
+    except (ImportError, ModuleNotFoundError, KeyError, AttributeError, TypeError) as _e:
         import warnings
         warnings.warn(
             f"napari-SAM4IS: CJK font patch failed ({_e}). "
