@@ -148,6 +148,19 @@ the coverage at least stays the same before you submit a pull request.
 Distributed under the terms of the [Apache Software License 2.0] license,
 "napari-SAM4IS" is free and open source software
 
+## Citation
+
+If you use napari-SAM4IS in your research, please cite it:
+
+```bibtex
+@software{kawai_napari_sam4is,
+  author  = {Kawai, Hiroki},
+  title   = {napari-SAM4IS},
+  url     = {https://github.com/hiroalchem/napari-SAM4IS},
+  license = {Apache-2.0},
+}
+```
+
 ## Issues
 
 If you encounter any problems, please [file an issue] along with a detailed description.

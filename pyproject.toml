@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-SAM4IS"
-version = "0.1.5"
+version = "0.1.6"
 description = "Create annotations for instance segmentation using Segment Anything models"
 readme = "README.md"
 license = "Apache-2.0"
@@ -66,7 +66,7 @@ napari-SAM4IS = "napari_sam4is:napari.yaml"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml"]
+"*" = ["*.yaml", "fonts/*.ttf", "fonts/*.txt"]
 
 [tool.black]
 line-length = 79

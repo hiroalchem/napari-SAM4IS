@@ -140,6 +140,19 @@ pip install -e .
 [Apache Software License 2.0] ライセンスの下で配布されています。
 「napari-SAM4IS」はフリーかつオープンソースのソフトウェアです。
 
+## Citation
+
+napari-SAM4IS を研究に使用した場合は、以下の形式で引用してください：
+
+```bibtex
+@software{kawai_napari_sam4is,
+  author  = {Kawai, Hiroki},
+  title   = {napari-SAM4IS},
+  url     = {https://github.com/hiroalchem/napari-SAM4IS},
+  license = {Apache-2.0},
+}
+```
+
 ## Issues
 
 問題が発生した場合は、詳細な説明とともに [Issue を報告](https://github.com/hiroalchem/napari-SAM4IS/issues) してください。

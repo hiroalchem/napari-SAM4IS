@@ -85,3 +85,5 @@ venv/
 
 CLAUDE.md
 .claude/
+plans/
+uv.lock
