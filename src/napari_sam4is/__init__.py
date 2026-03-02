@@ -31,6 +31,7 @@ def _patch_vispy_cjk_font():
 
         # Import modules so they appear in sys.modules, then access via sys.modules
         import vispy.util.fonts._vispy_fonts  # noqa: F401
+
         _vf_mod = _sys2.modules["vispy.util.fonts._vispy_fonts"]
         _triage_mod = _sys2.modules["vispy.util.fonts._triage"]
 
@@ -52,9 +53,11 @@ def _patch_vispy_cjk_font():
         # Also patch the platform-specific module's reference to _get_vispy_font_filename
         if _sys.platform == "darwin":
             import vispy.util.fonts._quartz  # noqa: F401
+
             _platform_mod = _sys2.modules["vispy.util.fonts._quartz"]
         else:
             import vispy.util.fonts._freetype  # noqa: F401
+
             _platform_mod = _sys2.modules["vispy.util.fonts._freetype"]
 
         _platform_mod._get_vispy_font_filename = _patched_get_filename
@@ -72,12 +75,20 @@ def _patch_vispy_cjk_font():
         # Patch the reference in the text visual module (used by TextureFont._load_char)
         try:
             import vispy.visuals.text.text  # noqa: F401
+
             _text_mod = _sys2.modules["vispy.visuals.text.text"]
             _text_mod._load_glyph = _cjk_load_glyph
         except (ImportError, KeyError, AttributeError):
             pass
-    except (ImportError, ModuleNotFoundError, KeyError, AttributeError, TypeError) as _e:
+    except (
+        ImportError,
+        ModuleNotFoundError,
+        KeyError,
+        AttributeError,
+        TypeError,
+    ) as _e:
         import warnings
+
         warnings.warn(
             f"napari-SAM4IS: CJK font patch failed ({_e}). "
             "Japanese class names may not display correctly on layers.",

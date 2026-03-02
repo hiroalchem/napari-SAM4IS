@@ -876,7 +876,9 @@ class SAMWidget(QWidget):
     def _iter_all_tree_items(self):
         """Iterate all items in the class tree (depth-first)."""
         stack = []
-        for i in range(self._class_list_widget.topLevelItemCount() - 1, -1, -1):
+        for i in range(
+            self._class_list_widget.topLevelItemCount() - 1, -1, -1
+        ):
             stack.append(self._class_list_widget.topLevelItem(i))
         while stack:
             item = stack.pop()
@@ -886,13 +888,13 @@ class SAMWidget(QWidget):
 
     def _get_all_class_ids(self):
         """Return list of all class IDs in the tree."""
+        import contextlib
+
         ids = []
         for item in self._iter_all_tree_items():
             text = item.text(0)
-            try:
+            with contextlib.suppress(ValueError, IndexError):
                 ids.append(int(text.split(":")[0].strip()))
-            except (ValueError, IndexError):
-                pass
         return ids
 
     def _get_item_local_name(self, item):
@@ -1112,9 +1114,7 @@ class SAMWidget(QWidget):
 
     def _sort_class_tree(self):
         """Sort top-level tree items by numeric ID prefix."""
-        self._class_list_widget.sortItems(
-            0, Qt.AscendingOrder
-        )
+        self._class_list_widget.sortItems(0, Qt.AscendingOrder)
 
     def _load_classes(self):
         """Load class definitions from a YAML file."""
@@ -1135,9 +1135,7 @@ class SAMWidget(QWidget):
         self._class_list_widget.clear()
 
         if "hierarchy" in data:
-            self._load_hierarchy_from_dict(
-                data["hierarchy"], None
-            )
+            self._load_hierarchy_from_dict(data["hierarchy"], None)
         elif "names" in data:
             # Backward compatibility: flat format
             for key, value in data["names"].items():
@@ -1898,7 +1896,7 @@ class SAMWidget(QWidget):
             QMessageBox.warning(
                 self,
                 "Cannot load annotations",
-                "Annotation loading is only supported " "in instance mode.",
+                "Annotation loading is only supported in instance mode.",
             )
             return
         fname, _ = QFileDialog.getOpenFileName(
