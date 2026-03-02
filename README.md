@@ -82,20 +82,35 @@ For more detailed instructions, please refer to the [SAM installation guide](htt
 6. Finally, select the output layer as "shapes" for instance segmentation or "labels" for semantic segmentation. (For instance segmentation, the "Accept" layer can also be used.)
 
 ### Class Management
-You can define annotation classes to assign to each segmented object.
+You can define annotation classes to assign to each segmented object. Classes support a hierarchical (parent–child) structure.
 
-1. In the **Class Management** section, type a class name and click **Add** (or press Enter) to add a new class.
-2. Click a class in the list to select it. The selected class will be assigned to subsequent annotations.
-3. To reassign a class, select an existing annotation in the output Shapes layer, then click the desired class.
-4. Classes in use cannot be deleted. Remove the associated annotations first.
-5. You can load class definitions from a YAML file (click **Load**). The expected format is:
+1. In the **Class Management** section, type a class name and click **Add** (or press Enter) to add a new top-level class.
+2. To add a subclass, first select a parent class in the tree, type the subclass name, and click **Add Sub**.
+3. Click a class in the tree to select it. The selected class will be assigned to subsequent annotations.
+4. To reassign a class, select an existing annotation in the output Shapes layer, then click the desired class.
+5. Classes with subclasses cannot be deleted. Remove all subclasses first. Classes in use cannot be deleted either.
+6. You can load class definitions from a YAML file (click **Load**). The supported formats are:
    ```yaml
+   # New hierarchical format
+   classes:
+     - id: 0
+       name: animal
+       children:
+         - id: 1
+           name: cat
+         - id: 2
+           name: dog
+     - id: 3
+       name: vehicle
+   ```
+   ```yaml
+   # Legacy flat format (still supported)
    names:
      0: cat
      1: dog
      2: bird
    ```
-6. Class definitions are automatically saved as `class.yaml` alongside the COCO JSON output.
+7. Class definitions are automatically saved as `class.yaml` alongside the COCO JSON output.
 
 ### Annotation with SAM
 1. Select the SAM-Box layer and use the rectangle tool to enclose the object you want to segment.
