@@ -1140,7 +1140,10 @@ class SAMWidget(QWidget):
 
         self._class_list_widget.clear()
 
-        if "hierarchy" in data:
+        if "classes" in data:
+            self._load_classes_from_list(data["classes"], None)
+        elif "hierarchy" in data:
+            # Backward compatibility: old dict-keyed format
             self._load_hierarchy_from_dict(data["hierarchy"], None)
         elif "names" in data:
             # Backward compatibility: flat format
@@ -1154,8 +1157,25 @@ class SAMWidget(QWidget):
             return
         self._sort_class_tree()
 
+    def _load_classes_from_list(self, classes_list, parent_item):
+        """Recursively load class hierarchy from list-of-dicts into tree."""
+        for entry in classes_list:
+            class_id = int(entry.get("id", 0))
+            class_name = str(entry.get("name", "")).strip()
+            children = entry.get("children", [])
+
+            item = QTreeWidgetItem([f"{class_id}: {class_name}"])
+            if parent_item is None:
+                self._class_list_widget.addTopLevelItem(item)
+            else:
+                parent_item.addChild(item)
+
+            if children:
+                self._load_classes_from_list(children, item)
+                item.setExpanded(True)
+
     def _load_hierarchy_from_dict(self, hierarchy_dict, parent_item):
-        """Recursively load class hierarchy from dict into tree."""
+        """Recursively load class hierarchy from dict into tree (legacy format)."""
         for key, value in hierarchy_dict.items():
             class_id = int(key)
             if isinstance(value, dict):
@@ -1234,32 +1254,31 @@ class SAMWidget(QWidget):
     def _save_class_yaml(self, directory):
         """Save class definitions to class.yaml with hierarchy."""
 
-        def _build_hierarchy(parent_item):
+        def _build_list(parent_item):
             count = (
                 parent_item.childCount()
                 if parent_item is not None
                 else self._class_list_widget.topLevelItemCount()
             )
-            result = {}
+            result = []
             for i in range(count):
-                if parent_item is not None:
-                    child = parent_item.child(i)
-                else:
-                    child = self._class_list_widget.topLevelItem(i)
-                cat_id = self._get_item_id(child)
-                local_name = self._get_item_local_name(child)
+                child = (
+                    parent_item.child(i)
+                    if parent_item is not None
+                    else self._class_list_widget.topLevelItem(i)
+                )
+                entry = {
+                    "id": self._get_item_id(child),
+                    "name": self._get_item_local_name(child),
+                }
                 if child.childCount() > 0:
-                    result[cat_id] = {
-                        "name": local_name,
-                        "children": _build_hierarchy(child),
-                    }
-                else:
-                    result[cat_id] = local_name
+                    entry["children"] = _build_list(child)
+                result.append(entry)
             return result
 
-        hierarchy = _build_hierarchy(None)
-        if hierarchy:
-            class_data = {"hierarchy": hierarchy}
+        classes = _build_list(None)
+        if classes:
+            class_data = {"classes": classes}
             path = os.path.join(directory, "class.yaml")
             with open(path, "w", encoding="utf-8") as f:
                 yaml.dump(
