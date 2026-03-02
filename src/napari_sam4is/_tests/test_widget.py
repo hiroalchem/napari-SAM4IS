@@ -175,6 +175,8 @@ def test_separator_in_class_name_rejected(make_napari_viewer):
 
 def test_del_class_with_children_blocked(make_napari_viewer):
     """Test that deleting a class with subclasses is blocked."""
+    from unittest.mock import patch
+
     viewer = make_napari_viewer()
     viewer.add_image(np.random.random((100, 100)))
     widget = SAMWidget(viewer)
@@ -186,13 +188,15 @@ def test_del_class_with_children_blocked(make_napari_viewer):
     widget._class_name_input.setText("Cat")
     widget._add_subclass()
 
-    # Try to delete parent (should be blocked — has children)
+    # Try to delete parent — should be blocked and show a warning dialog
     widget._class_list_widget.setCurrentItem(parent_item)
-    # _del_class would show QMessageBox, but in test it will raise
-    # or be blocked; we just check that the item remains
-    # (QMessageBox.warning will not be interactive in tests,
-    # so the method returns early after the check)
+    with patch("napari_sam4is._widget.QMessageBox.warning") as mock_warning:
+        widget._del_class()
+        mock_warning.assert_called_once()
+
+    # Parent and child must still be present
     assert widget._class_list_widget.topLevelItemCount() == 1
+    assert widget._class_list_widget.topLevelItem(0).childCount() == 1
 
 
 def test_find_missing_class_number():

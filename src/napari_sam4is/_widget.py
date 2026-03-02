@@ -192,6 +192,7 @@ class SAMWidget(QWidget):
         self._class_list_widget.setSelectionMode(
             QAbstractItemView.SingleSelection
         )
+        self._class_list_widget.setMinimumHeight(200)
         self._class_list_widget.itemClicked.connect(self._on_class_clicked)
         self._class_layout.addWidget(self._class_list_widget)
 
@@ -1113,8 +1114,13 @@ class SAMWidget(QWidget):
             self._class_list_widget.takeTopLevelItem(idx)
 
     def _sort_class_tree(self):
-        """Sort top-level tree items by numeric ID prefix."""
-        self._class_list_widget.sortItems(0, Qt.AscendingOrder)
+        """Sort top-level tree items by numeric ID (not lexicographic)."""
+        root = self._class_list_widget.invisibleRootItem()
+        count = root.childCount()
+        items = [root.takeChild(0) for _ in range(count)]
+        items.sort(key=lambda it: self._get_item_id(it))
+        for it in items:
+            root.addChild(it)
 
     def _load_classes(self):
         """Load class definitions from a YAML file."""
@@ -1285,13 +1291,21 @@ class SAMWidget(QWidget):
             cat_name = cat.get("name", "object")
             supercategory = cat.get("supercategory", "")
 
-            # Determine if this is a hierarchical name
-            if sep in cat_name:
-                parts = cat_name.rsplit(sep, 1)
-                parent_path = parts[0]
-                local_name = parts[1]
+            # Use supercategory to determine hierarchy.
+            # This plugin writes cat_name as the full path (e.g. "A-B-C")
+            # and supercategory as the parent path (e.g. "A-B"), so
+            # cat_name always starts with supercategory + sep.
+            # Legacy/external COCO files use supercategory == cat_name or a
+            # name that does NOT start with supercategory + sep, so we
+            # preserve the full name as-is in those cases.
+            plugin_hierarchy = supercategory and cat_name.startswith(
+                supercategory + sep
+            )
+            if plugin_hierarchy:
+                local_name = cat_name[len(supercategory) + len(sep) :]
+                parent_path = supercategory
             else:
-                parent_path = supercategory if supercategory else ""
+                parent_path = ""
                 local_name = cat_name
 
             item = QTreeWidgetItem([f"{cat_id}: {local_name}"])
