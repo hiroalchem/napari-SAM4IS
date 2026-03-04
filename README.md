@@ -142,6 +142,15 @@ Each annotation can have additional attributes to support quality control workfl
 4. Attributes are saved as part of the COCO JSON output under each annotation's `"attributes"` field.
 5. When multiple annotations are selected with mixed attribute values, checkboxes show a mixed state indicator.
 
+### Display Settings
+The **Display Settings** panel lets you customize the appearance of annotation layers and persist those preferences across sessions.
+
+- **Accepted edge color**: Click the color swatch to open a color picker and change the outline color of accepted annotations. The new color is applied immediately to all existing shapes on the Accepted layer and saved for future sessions.
+- **Annotation text color**: Click the color swatch to change the color of class label text shown on annotation shapes.
+- **Annotation text size**: Adjust the integer spinner to change the font size of class label text.
+
+All settings are saved to `settings.json` in the OS user-config directory (e.g. `~/Library/Preferences/napari-SAM4IS/` on macOS) and restored automatically on the next launch.
+
 ### Saving and Loading Annotations
 1. If you have output to the labels layer, use napari's standard functionality to save the mask.
 2. If you have output to the shapes layer, you can save the shapes layer using napari's standard functionality, or you can click the **Save** button to output a JSON file in COCO format for each image in the folder. (The JSON file will have the same name as the image.) Class definitions will also be saved as `class.yaml` in the same directory.
