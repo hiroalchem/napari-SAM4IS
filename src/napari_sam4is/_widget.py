@@ -3,19 +3,23 @@ import io
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import napari
 import numpy as np
 import pandas as pd
+import platformdirs
 import requests
 import torch
 import yaml
 from PIL import Image
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QTimer
+from qtpy.QtGui import QColor
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -26,6 +30,7 @@ from qtpy.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -61,11 +66,73 @@ _ATTR_DEFAULTS = {
     "reviewed_at": "",
 }
 
+_SETTINGS_DEFAULTS = {
+    "accepted_edge_color": "#ffff00",
+    "text_color": "#ffff00",
+    "text_size": 12,
+}
+_TEXT_SIZE_MIN = 6
+_TEXT_SIZE_MAX = 72
+_SETTINGS_SAVE_WARNED = False
+_TEXT_SIZE_SAVE_DEBOUNCE_MS = 300
+
+
+def _sanitize_settings(data: dict) -> dict:
+    settings = dict(_SETTINGS_DEFAULTS)
+    if not isinstance(data, dict):
+        return settings
+
+    for key in ("accepted_edge_color", "text_color"):
+        value = data.get(key)
+        if isinstance(value, str) and QColor(value).isValid():
+            settings[key] = QColor(value).name()
+
+    raw_size = data.get("text_size")
+    try:
+        size = int(raw_size)
+    except (TypeError, ValueError):
+        size = _SETTINGS_DEFAULTS["text_size"]
+    settings["text_size"] = max(_TEXT_SIZE_MIN, min(_TEXT_SIZE_MAX, size))
+    return settings
+
+
+def _load_settings() -> dict:
+    path = (
+        Path(platformdirs.user_config_dir("napari-SAM4IS")) / "settings.json"
+    )
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return _sanitize_settings(data)
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+            pass
+    return dict(_SETTINGS_DEFAULTS)
+
+
+def _save_settings(settings: dict) -> None:
+    global _SETTINGS_SAVE_WARNED
+    path = (
+        Path(platformdirs.user_config_dir("napari-SAM4IS")) / "settings.json"
+    )
+    safe_settings = _sanitize_settings(settings)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(safe_settings, indent=2), encoding="utf-8")
+        _SETTINGS_SAVE_WARNED = False
+    except OSError as exc:
+        if not _SETTINGS_SAVE_WARNED:
+            print(f"Warning: Failed to save settings to {path}: {exc}")
+            _SETTINGS_SAVE_WARNED = True
+
 
 class SAMWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
         self._viewer = napari_viewer
+        self._settings = _load_settings()
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.timeout.connect(self._flush_settings_save)
 
         self._shapes_layer_selection = None
         self._labels_layer_selection = None
@@ -256,6 +323,51 @@ class SAMWidget(QWidget):
         self._updating_attr_ui = False
         self._connected_output_layer = None
 
+        # --- Display Settings group ---
+        self._display_group = QGroupBox("Display Settings")
+        self._display_layout = QVBoxLayout()
+
+        # Accepted edge color row
+        _edge_row = QHBoxLayout()
+        _edge_row.addWidget(QLabel("Accepted edge color:"))
+        self._edge_color_btn = QPushButton()
+        self._edge_color_btn.setFixedSize(32, 20)
+        self._edge_color_btn.setStyleSheet(
+            f"background-color: {self._settings['accepted_edge_color']};"
+        )
+        self._edge_color_btn.clicked.connect(self._on_edge_color_btn_clicked)
+        _edge_row.addWidget(self._edge_color_btn)
+        _edge_row.addStretch()
+        self._display_layout.addLayout(_edge_row)
+
+        # Text color row
+        _text_color_row = QHBoxLayout()
+        _text_color_row.addWidget(QLabel("Annotation text color:"))
+        self._text_color_btn = QPushButton()
+        self._text_color_btn.setFixedSize(32, 20)
+        self._text_color_btn.setStyleSheet(
+            f"background-color: {self._settings['text_color']};"
+        )
+        self._text_color_btn.clicked.connect(self._on_text_color_btn_clicked)
+        _text_color_row.addWidget(self._text_color_btn)
+        _text_color_row.addStretch()
+        self._display_layout.addLayout(_text_color_row)
+
+        # Text size row
+        _text_size_row = QHBoxLayout()
+        _text_size_row.addWidget(QLabel("Annotation text size:"))
+        self._text_size_spin = QSpinBox()
+        self._text_size_spin.setRange(_TEXT_SIZE_MIN, _TEXT_SIZE_MAX)
+        self._text_size_spin.setValue(self._settings["text_size"])
+        self._text_size_spin.valueChanged.connect(self._on_text_size_changed)
+        _text_size_row.addWidget(self._text_size_spin)
+        _text_size_row.addWidget(QLabel("px"))
+        _text_size_row.addStretch()
+        self._display_layout.addLayout(_text_size_row)
+
+        self._display_group.setLayout(self._display_layout)
+        self.vbox.addWidget(self._display_group)
+
         # --- Save / Load buttons ---
         self.vbox.addWidget(
             QLabel(
@@ -328,7 +440,7 @@ class SAMWidget(QWidget):
 
         self._accepted_layer = self._viewer.add_shapes(
             name="Accepted",
-            edge_color="green",
+            edge_color=self._settings["accepted_edge_color"],
             edge_width=6,
             face_color="transparent",
         )
@@ -652,6 +764,59 @@ class SAMWidget(QWidget):
                     self._on_output_selection_changed
                 )
             self._connected_output_layer = None
+
+    # --- Display Settings Handlers ---
+
+    def _on_edge_color_btn_clicked(self):
+        current = QColor(self._settings["accepted_edge_color"])
+        color = QColorDialog.getColor(current, self, "Accepted Edge Color")
+        if color.isValid():
+            hex_color = color.name()
+            self._settings["accepted_edge_color"] = hex_color
+            _save_settings(self._settings)
+            self._edge_color_btn.setStyleSheet(
+                f"background-color: {hex_color};"
+            )
+            n = len(self._accepted_layer.data)
+            if n > 0:
+                self._accepted_layer.edge_color = [hex_color] * n
+            self._accepted_layer.current_edge_color = hex_color
+
+    def _on_text_color_btn_clicked(self):
+        current = QColor(self._settings["text_color"])
+        color = QColorDialog.getColor(current, self, "Annotation Text Color")
+        if color.isValid():
+            hex_color = color.name()
+            self._settings["text_color"] = hex_color
+            _save_settings(self._settings)
+            self._text_color_btn.setStyleSheet(
+                f"background-color: {hex_color};"
+            )
+            self._apply_text_settings_to_all_layers()
+
+    def _on_text_size_changed(self, value: int):
+        self._settings["text_size"] = value
+        self._settings_save_timer.start(_TEXT_SIZE_SAVE_DEBOUNCE_MS)
+        self._apply_text_settings_to_all_layers()
+
+    def _flush_settings_save(self):
+        _save_settings(self._settings)
+
+    def _apply_text_settings_to_all_layers(self):
+        """Apply text settings to plugin-managed output Shapes layers only.
+
+        Plugin output layers are identified by having a "class" feature
+        column (added by _ensure_features_columns).
+        """
+        for layer in self._viewer.layers:
+            if (
+                isinstance(layer, napari.layers.Shapes)
+                and self._has_text_set(layer)
+                and "class" in layer.features.columns
+            ):
+                layer.text.color = self._settings["text_color"]
+                layer.text.size = self._settings["text_size"]
+                layer.refresh_text()
 
     # --- Annotation Attributes Handlers ---
 
@@ -1736,8 +1901,8 @@ class SAMWidget(QWidget):
                         output_layer.text = {
                             "string": "{class}",
                             "anchor": "upper_left",
-                            "size": 10,
-                            "color": "green",
+                            "size": self._settings["text_size"],
+                            "color": self._settings["text_color"],
                         }
                     output_layer.feature_defaults["class"] = selected_class
                     for key, val in _ATTR_DEFAULTS.items():
@@ -2083,8 +2248,8 @@ class SAMWidget(QWidget):
             output_layer.text = {
                 "string": "{class}",
                 "anchor": "upper_left",
-                "size": 10,
-                "color": "green",
+                "size": self._settings["text_size"],
+                "color": self._settings["text_color"],
             }
 
         loaded_count = 0

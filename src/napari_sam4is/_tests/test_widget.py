@@ -710,6 +710,254 @@ def test_yaml_unicode_roundtrip():
         os.unlink(tmp_path)
 
 
+# --- Display Settings Tests ---
+
+
+def test_load_settings_defaults(tmp_path, monkeypatch):
+    """_load_settings returns defaults when no settings.json exists."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    from napari_sam4is._widget import _SETTINGS_DEFAULTS, _load_settings
+
+    settings = _load_settings()
+    assert settings == _SETTINGS_DEFAULTS
+
+
+def test_load_settings_from_file(tmp_path, monkeypatch):
+    """_load_settings reads and sanitizes an existing settings.json."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "accepted_edge_color": "#ff0000",
+                "text_color": "#0000ff",
+                "text_size": 20,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from napari_sam4is._widget import _load_settings
+
+    settings = _load_settings()
+    assert settings["accepted_edge_color"] == "#ff0000"
+    assert settings["text_color"] == "#0000ff"
+    assert settings["text_size"] == 20
+
+
+def test_load_settings_invalid_color_falls_back(tmp_path, monkeypatch):
+    """Invalid color strings fall back to defaults."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"accepted_edge_color": "not-a-color", "text_size": 20}),
+        encoding="utf-8",
+    )
+
+    from napari_sam4is._widget import _SETTINGS_DEFAULTS, _load_settings
+
+    settings = _load_settings()
+    assert (
+        settings["accepted_edge_color"]
+        == _SETTINGS_DEFAULTS["accepted_edge_color"]
+    )
+    assert settings["text_size"] == 20
+
+
+def test_load_settings_invalid_size_falls_back(tmp_path, monkeypatch):
+    """Non-integer text_size falls back to default."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"text_size": "large"}), encoding="utf-8"
+    )
+
+    from napari_sam4is._widget import _SETTINGS_DEFAULTS, _load_settings
+
+    settings = _load_settings()
+    assert settings["text_size"] == _SETTINGS_DEFAULTS["text_size"]
+
+
+def test_load_settings_clamps_size(tmp_path, monkeypatch):
+    """text_size is clamped to [_TEXT_SIZE_MIN, _TEXT_SIZE_MAX]."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    from napari_sam4is._widget import (
+        _TEXT_SIZE_MAX,
+        _TEXT_SIZE_MIN,
+        _load_settings,
+    )
+
+    path = tmp_path / "settings.json"
+
+    path.write_text(json.dumps({"text_size": 9999}), encoding="utf-8")
+    assert _load_settings()["text_size"] == _TEXT_SIZE_MAX
+
+    path.write_text(json.dumps({"text_size": -5}), encoding="utf-8")
+    assert _load_settings()["text_size"] == _TEXT_SIZE_MIN
+
+
+def test_load_settings_malformed_json_falls_back(tmp_path, monkeypatch):
+    """Malformed JSON falls back to defaults without raising."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text("not json {{{", encoding="utf-8")
+
+    from napari_sam4is._widget import _SETTINGS_DEFAULTS, _load_settings
+
+    assert _load_settings() == _SETTINGS_DEFAULTS
+
+
+def test_load_settings_non_dict_json_falls_back(tmp_path, monkeypatch):
+    """Non-dict JSON (e.g. list) falls back to defaults."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps([1, 2, 3]), encoding="utf-8"
+    )
+
+    from napari_sam4is._widget import _SETTINGS_DEFAULTS, _load_settings
+
+    assert _load_settings() == _SETTINGS_DEFAULTS
+
+
+def test_save_settings_writes_file(tmp_path, monkeypatch):
+    """_save_settings writes valid JSON to the config path."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+
+    from napari_sam4is._widget import _save_settings
+
+    _save_settings(
+        {
+            "accepted_edge_color": "#123456",
+            "text_color": "#abcdef",
+            "text_size": 15,
+        }
+    )
+
+    written = json.loads(
+        (tmp_path / "settings.json").read_text(encoding="utf-8")
+    )
+    assert written["accepted_edge_color"] == "#123456"
+    assert written["text_size"] == 15
+
+
+def test_save_settings_oserror_warns_once(tmp_path, monkeypatch):
+    """_save_settings fails gracefully when write raises OSError."""
+    from unittest.mock import patch
+
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+
+    import napari_sam4is._widget as wmod
+
+    wmod._SETTINGS_SAVE_WARNED = False
+
+    with patch(
+        "napari_sam4is._widget.Path.write_text",
+        side_effect=OSError("disk full"),
+    ):
+        # Should not raise
+        wmod._save_settings(
+            {
+                "accepted_edge_color": "#ff0000",
+                "text_color": "#ff0000",
+                "text_size": 12,
+            }
+        )
+    assert wmod._SETTINGS_SAVE_WARNED is True
+
+    # Second call should not warn again (warned flag already set)
+    warned_before = wmod._SETTINGS_SAVE_WARNED
+    with patch(
+        "napari_sam4is._widget.Path.write_text",
+        side_effect=OSError("disk full"),
+    ):
+        wmod._save_settings(
+            {
+                "accepted_edge_color": "#ff0000",
+                "text_color": "#ff0000",
+                "text_size": 12,
+            }
+        )
+    assert warned_before == wmod._SETTINGS_SAVE_WARNED
+
+
+def test_widget_accepted_layer_edge_color_from_settings(
+    make_napari_viewer, tmp_path, monkeypatch
+):
+    """Accepted layer current_edge_color is initialized from loaded settings."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "accepted_edge_color": "#ff0000",
+                "text_color": "#ffffff",
+                "text_size": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    assert widget._settings["accepted_edge_color"] == "#ff0000"
+    # Verify edge_color_btn stylesheet reflects the setting
+    style = widget._edge_color_btn.styleSheet()
+    assert "#ff0000" in style
+
+
+def test_widget_text_size_spinbox_from_settings(
+    make_napari_viewer, tmp_path, monkeypatch
+):
+    """Text size spinbox reflects the loaded setting on startup."""
+    monkeypatch.setattr(
+        "napari_sam4is._widget.platformdirs.user_config_dir",
+        lambda _: str(tmp_path),
+    )
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "accepted_edge_color": "#ffff00",
+                "text_color": "#ffff00",
+                "text_size": 24,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    assert widget._text_size_spin.value() == 24
+
+
 def test_json_unicode_roundtrip():
     """Test that non-ASCII category names persist in COCO JSON."""
     image = np.zeros((100, 100), dtype=np.uint8)
