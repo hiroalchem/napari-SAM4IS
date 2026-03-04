@@ -13,7 +13,7 @@ import requests
 import torch
 import yaml
 from PIL import Image
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QTimer
 from qtpy.QtGui import QColor
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -71,6 +71,29 @@ _SETTINGS_DEFAULTS = {
     "text_color": "#ffff00",
     "text_size": 12,
 }
+_TEXT_SIZE_MIN = 6
+_TEXT_SIZE_MAX = 72
+_SETTINGS_SAVE_WARNED = False
+_TEXT_SIZE_SAVE_DEBOUNCE_MS = 300
+
+
+def _sanitize_settings(data: dict) -> dict:
+    settings = dict(_SETTINGS_DEFAULTS)
+    if not isinstance(data, dict):
+        return settings
+
+    for key in ("accepted_edge_color", "text_color"):
+        value = data.get(key)
+        if isinstance(value, str) and QColor(value).isValid():
+            settings[key] = QColor(value).name()
+
+    raw_size = data.get("text_size")
+    try:
+        size = int(raw_size)
+    except (TypeError, ValueError):
+        size = _SETTINGS_DEFAULTS["text_size"]
+    settings["text_size"] = max(_TEXT_SIZE_MIN, min(_TEXT_SIZE_MAX, size))
+    return settings
 
 
 def _load_settings() -> dict:
@@ -79,20 +102,27 @@ def _load_settings() -> dict:
     )
     if path.exists():
         try:
-            data = json.loads(path.read_text())
-            if isinstance(data, dict):
-                return {**_SETTINGS_DEFAULTS, **data}
-        except (json.JSONDecodeError, OSError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return _sanitize_settings(data)
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
             pass
     return dict(_SETTINGS_DEFAULTS)
 
 
 def _save_settings(settings: dict) -> None:
+    global _SETTINGS_SAVE_WARNED
     path = (
         Path(platformdirs.user_config_dir("napari-SAM4IS")) / "settings.json"
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2))
+    safe_settings = _sanitize_settings(settings)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(safe_settings, indent=2), encoding="utf-8")
+        _SETTINGS_SAVE_WARNED = False
+    except OSError as exc:
+        if not _SETTINGS_SAVE_WARNED:
+            print(f"Warning: Failed to save settings to {path}: {exc}")
+            _SETTINGS_SAVE_WARNED = True
 
 
 class SAMWidget(QWidget):
@@ -100,6 +130,9 @@ class SAMWidget(QWidget):
         super().__init__()
         self._viewer = napari_viewer
         self._settings = _load_settings()
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.timeout.connect(self._flush_settings_save)
 
         self._shapes_layer_selection = None
         self._labels_layer_selection = None
@@ -324,7 +357,7 @@ class SAMWidget(QWidget):
         _text_size_row = QHBoxLayout()
         _text_size_row.addWidget(QLabel("Annotation text size:"))
         self._text_size_spin = QSpinBox()
-        self._text_size_spin.setRange(6, 72)
+        self._text_size_spin.setRange(_TEXT_SIZE_MIN, _TEXT_SIZE_MAX)
         self._text_size_spin.setValue(self._settings["text_size"])
         self._text_size_spin.valueChanged.connect(self._on_text_size_changed)
         _text_size_row.addWidget(self._text_size_spin)
@@ -763,8 +796,11 @@ class SAMWidget(QWidget):
 
     def _on_text_size_changed(self, value: int):
         self._settings["text_size"] = value
-        _save_settings(self._settings)
+        self._settings_save_timer.start(_TEXT_SIZE_SAVE_DEBOUNCE_MS)
         self._apply_text_settings_to_all_layers()
+
+    def _flush_settings_save(self):
+        _save_settings(self._settings)
 
     def _apply_text_settings_to_all_layers(self):
         """Apply text settings to plugin-managed output Shapes layers only.
