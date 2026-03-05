@@ -1214,6 +1214,8 @@ def test_detect_all_box_mode_key_error(make_napari_viewer):
             sys.modules,
             {
                 "sam3": MagicMock(),
+                "sam3.model": MagicMock(),
+                "sam3.model.box_ops": MagicMock(),
                 "sam3.utils": MagicMock(),
                 "sam3.utils.misc": MagicMock(),
             },
