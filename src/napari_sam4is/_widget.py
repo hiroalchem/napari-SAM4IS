@@ -716,18 +716,28 @@ class SAMWidget(QWidget):
     def _is_layer_clear_in_progress():
         """Return True when current call stack is inside MutableSequence.clear."""
         frame = inspect.currentframe()
-        if frame is None:
-            return False
-        frame = frame.f_back
-        while frame is not None:
-            code = frame.f_code
-            if (
-                code.co_name == "clear"
-                and "_collections_abc" in code.co_filename
-            ):
-                return True
+        try:
+            if frame is None:
+                return False
             frame = frame.f_back
-        return False
+            while frame is not None:
+                code = frame.f_code
+                if (
+                    code.co_name == "clear"
+                    and "_collections_abc" in code.co_filename
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def closeEvent(self, event):
+        """Clean up resources when the widget is closed."""
+        if self._sam3_cleanup is not None:
+            self._sam3_cleanup()
+            self._sam3_cleanup = None
+        super().closeEvent(event)
 
     def _restore_critical_layer_if_needed(self, removed_layer):
         """Re-create a critical layer if it was deleted by the user."""

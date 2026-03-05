@@ -63,7 +63,7 @@ sam1 = [
     "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
 ]
 sam3 = [
-    "sam3>=0.1.0",
+    "sam3 @ git+https://github.com/hiroalchem/sam3.git@cac46f9caf87d76eac5f6bc63883e57a23036bcf",
     "numpy>=1.26.0",
     "timm>=1.0.17",
     "einops>=0.8.0,<0.9.0",
@@ -91,7 +91,7 @@ where = ["src"]
 constraint-dependencies = ["numpy>=1.26"]
 
 [tool.uv.sources]
-sam3 = { git = "https://github.com/hiroalchem/sam3.git", branch = "patched-macos" }
+sam3 = { git = "https://github.com/hiroalchem/sam3.git", rev = "cac46f9caf87d76eac5f6bc63883e57a23036bcf" }
 
 [dependency-groups]
 dev = [

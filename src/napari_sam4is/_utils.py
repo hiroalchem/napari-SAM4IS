@@ -317,7 +317,8 @@ def load_sam3_model(checkpoint_path: str | None = None):
             If None, downloads from HuggingFace (gated access required).
 
     Returns:
-        tuple: (model, processor)
+        tuple: (model, processor, cleanup) where cleanup is a callable
+            that reverts the pin_memory monkey-patch (or None on CUDA).
 
     Raises:
         ImportError: sam3 not installed
