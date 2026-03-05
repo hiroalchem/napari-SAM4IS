@@ -1,6 +1,8 @@
 import base64
+import inspect
 import io
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +23,7 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -194,9 +197,77 @@ class SAMWidget(QWidget):
         self._model_selection = QComboBox()
         self._model_selection.addItems(get_available_model_names())
         self.vbox.addWidget(self._model_selection)
+
+        # SAM3 checkpoint input (shown only when "sam3" is selected)
+        self._sam3_ckpt_lineedit = QLineEdit()
+        self._sam3_ckpt_lineedit.setPlaceholderText(
+            "(blank = auto download from HuggingFace)"
+        )
+        self._sam3_ckpt_browse_btn = QPushButton("Browse...")
+        self._sam3_ckpt_browse_btn.clicked.connect(
+            self._browse_sam3_checkpoint
+        )
+        ckpt_row = QHBoxLayout()
+        ckpt_row.addWidget(self._sam3_ckpt_lineedit)
+        ckpt_row.addWidget(self._sam3_ckpt_browse_btn)
+        self._sam3_ckpt_widget = QWidget()
+        ckpt_vbox = QVBoxLayout()
+        ckpt_vbox.setContentsMargins(0, 0, 0, 0)
+        ckpt_vbox.addWidget(QLabel("SAM3 checkpoint:"))
+        ckpt_vbox.addLayout(ckpt_row)
+        self._sam3_ckpt_widget.setLayout(ckpt_vbox)
+        self._sam3_ckpt_widget.setVisible(False)
+        self.vbox.addWidget(self._sam3_ckpt_widget)
+        self._model_selection.currentTextChanged.connect(
+            lambda text: self._sam3_ckpt_widget.setVisible(text == "sam3")
+        )
+
         self._model_load_btn = QPushButton("load model")
         self._model_load_btn.clicked.connect(self._load_model)
         self.vbox.addWidget(self._model_load_btn)
+
+        # SAM3 Detect All prompt group (shown after SAM3 is loaded)
+        self._sam3_prompt_group = QGroupBox("Detect All Prompt")
+        sam3_prompt_layout = QVBoxLayout()
+        self._sam3_prompt_text_radio = QRadioButton("Text (class name)")
+        self._sam3_prompt_box_radio = QRadioButton("Box (exemplar)")
+        self._sam3_prompt_both_radio = QRadioButton("Text + Box")
+        self._sam3_prompt_both_radio.setChecked(True)
+        for rb in (
+            self._sam3_prompt_text_radio,
+            self._sam3_prompt_box_radio,
+            self._sam3_prompt_both_radio,
+        ):
+            sam3_prompt_layout.addWidget(rb)
+        self._sam3_detect_all_btn = QPushButton("Detect All (SAM3)")
+        self._sam3_detect_all_btn.clicked.connect(self._on_sam3_detect_all)
+        sam3_prompt_layout.addWidget(self._sam3_detect_all_btn)
+
+        iou_layout = QHBoxLayout()
+        iou_layout.addWidget(QLabel("IoU threshold:"))
+        self._iou_threshold_spin = QDoubleSpinBox()
+        self._iou_threshold_spin.setRange(0.0, 1.0)
+        self._iou_threshold_spin.setSingleStep(0.05)
+        self._iou_threshold_spin.setValue(0.5)
+        self._iou_threshold_spin.setToolTip(
+            "IoU がこの閾値以上の既存 shape がある場合、"
+            "新しいマスクを追加しません"
+        )
+        iou_layout.addWidget(self._iou_threshold_spin)
+        sam3_prompt_layout.addLayout(iou_layout)
+
+        self._iou_same_class_checkbox = QCheckBox("Same class only")
+        self._iou_same_class_checkbox.setChecked(True)
+        self._iou_same_class_checkbox.setToolTip(
+            "チェック時: 同一クラスの既存 shape のみ IoU 比較\n"
+            "未チェック時: 全クラス横断で IoU 比較"
+        )
+        sam3_prompt_layout.addWidget(self._iou_same_class_checkbox)
+
+        self._sam3_prompt_group.setLayout(sam3_prompt_layout)
+        self._sam3_prompt_group.setVisible(False)
+        self.vbox.addWidget(self._sam3_prompt_group)
+
         self.vbox.addWidget(QLabel("input image layer"))
         self._image_layer_selection = QComboBox()
         self._image_layer_selection.addItems(
@@ -287,6 +358,18 @@ class SAMWidget(QWidget):
 
         self._class_group.setLayout(self._class_layout)
         self.vbox.addWidget(self._class_group)
+
+        # --- Edit in SAM-Predict button (always available) ---
+        self._send_to_predict_btn = QPushButton("Edit in SAM-Predict (E)")
+        self._send_to_predict_btn.setToolTip(
+            "選択した shape を SAM-Predict レイヤーに戻す\n"
+            "A キーで再 Accept 可能"
+        )
+        self._send_to_predict_btn.clicked.connect(
+            self._send_selected_to_predict
+        )
+        self._send_to_predict_btn.setEnabled(False)
+        self.vbox.addWidget(self._send_to_predict_btn)
 
         # --- Annotation Attributes group ---
         self._attr_group = QGroupBox("Annotation Attributes")
@@ -467,6 +550,11 @@ class SAMWidget(QWidget):
         self._sam_model = None
         self.sam_predictor = None
 
+        self._sam3_model = None
+        self._sam3_processor = None
+        self._sam3_inference_state = None
+        self._sam3_cleanup = None
+
         self._viewer.layers.events.inserted.connect(
             self._on_layer_list_changed
         )
@@ -496,6 +584,14 @@ class SAMWidget(QWidget):
         self._model_selection.setEnabled(not is_checked)
         self._model_load_btn.setEnabled(not is_checked)
 
+        # SAM3 is local-only: hide its UI elements in API mode
+        self._sam3_ckpt_widget.setVisible(
+            not is_checked and self._model_selection.currentText() == "sam3"
+        )
+        self._sam3_prompt_group.setVisible(
+            not is_checked and self._sam3_processor is not None
+        )
+
     def _get_image_shape(self):
         """Return 2D shape of the currently selected image layer."""
         layer_name = self._image_layer_selection.currentText()
@@ -524,6 +620,7 @@ class SAMWidget(QWidget):
             self._api_group.setEnabled(False)
             self._model_selection.setEnabled(False)
             self._model_load_btn.setEnabled(False)
+            self._sam3_prompt_group.setEnabled(False)
 
             # Hide SAM layers
             self._sam_box_layer.visible = False
@@ -542,6 +639,10 @@ class SAMWidget(QWidget):
             is_api = self._use_api_checkbox.isChecked()
             self._model_selection.setEnabled(not is_api)
             self._model_load_btn.setEnabled(not is_api)
+            # Only enable SAM3 group if not in API mode and SAM3 is loaded
+            self._sam3_prompt_group.setEnabled(
+                not is_api and self._sam3_processor is not None
+            )
 
             # Show SAM layers
             self._sam_box_layer.visible = True
@@ -592,18 +693,103 @@ class SAMWidget(QWidget):
 
     def _on_layer_removed(self, event):
         """Handle layer removal and cleanup connections"""
+        removed = None
         if (
             event is not None
             and hasattr(event, "value")
             and event.value is not None
         ):
-            # Remove from connected layers set
-            layer_id = id(event.value)
+            removed = event.value
+            layer_id = id(removed)
             if layer_id in self._connected_layers:
                 self._connected_layers.remove(layer_id)
 
+        # Skip restore during bulk clear (e.g. viewer.close -> layers.clear)
+        # to avoid re-adding layers while teardown is actively removing them.
+        if removed is not None and not self._is_layer_clear_in_progress():
+            self._restore_critical_layer_if_needed(removed)
+
         # Refresh layer selections
         self._refresh_layer_selections()
+
+    @staticmethod
+    def _is_layer_clear_in_progress():
+        """Return True when current call stack is inside MutableSequence.clear."""
+        frame = inspect.currentframe()
+        try:
+            if frame is None:
+                return False
+            frame = frame.f_back
+            while frame is not None:
+                code = frame.f_code
+                if (
+                    code.co_name == "clear"
+                    and "_collections_abc" in code.co_filename
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def closeEvent(self, event):
+        """Clean up resources when the widget is closed."""
+        if self._sam3_cleanup is not None:
+            self._sam3_cleanup()
+            self._sam3_cleanup = None
+        super().closeEvent(event)
+
+    def _restore_critical_layer_if_needed(self, removed_layer):
+        """Re-create a critical layer if it was deleted by the user."""
+        if removed_layer is self._sam_box_layer:
+            self._sam_box_layer = self._viewer.add_shapes(
+                name="SAM-Box",
+                edge_color="red",
+                edge_width=2,
+                face_color="transparent",
+            )
+            self._sam_box_layer.mouse_drag_callbacks.append(
+                self._on_sam_box_created
+            )
+            self._sam_box_layer.bind_key("R", self._reject_all_boxes)
+            self.lock_controls(self._sam_box_layer)
+
+        elif removed_layer is self._sam_positive_point_layer:
+            self._sam_positive_point_layer = self._viewer.add_points(
+                name="SAM-Positive", face_color="green", size=10
+            )
+            self._sam_positive_point_layer.events.data.connect(
+                self._on_sam_point_changed
+            )
+
+        elif removed_layer is self._sam_negative_point_layer:
+            self._sam_negative_point_layer = self._viewer.add_points(
+                name="SAM-Negative", face_color="red", size=10
+            )
+            self._sam_negative_point_layer.events.data.connect(
+                self._on_sam_point_changed
+            )
+
+        elif removed_layer is self._labels_layer:
+            shape = removed_layer.data.shape
+            self._labels_layer = self._viewer.add_labels(
+                np.zeros(shape, dtype="uint8"),
+                name="SAM-Predict",
+                blending="additive",
+                opacity=0.5,
+            )
+            self._labels_layer.bind_key("A", self._accept_mask)
+            self._labels_layer.bind_key("R", self._reject_mask)
+
+        elif removed_layer is self._accepted_layer:
+            self._accepted_layer = self._viewer.add_shapes(
+                name="Accepted",
+                edge_color=self._settings["accepted_edge_color"],
+                edge_width=6,
+                face_color="transparent",
+            )
+            # Re-connect output layer events (including E key binding)
+            self._connect_output_layer_events(self._accepted_layer)
 
     def _refresh_layer_selections(self):
         """Refresh all layer selection ComboBoxes with current layer names"""
@@ -752,6 +938,7 @@ class SAMWidget(QWidget):
         """Connect to output shapes layer highlight events."""
         self._disconnect_output_layer_events()
         layer.events.highlight.connect(self._on_output_selection_changed)
+        layer.bind_key("E", lambda _: self._send_selected_to_predict())
         self._connected_output_layer = layer
 
     def _disconnect_output_layer_events(self):
@@ -763,6 +950,8 @@ class SAMWidget(QWidget):
                 self._connected_output_layer.events.highlight.disconnect(
                     self._on_output_selection_changed
                 )
+            with contextlib.suppress(TypeError, RuntimeError):
+                self._connected_output_layer.bind_key("E", None)
             self._connected_output_layer = None
 
     # --- Display Settings Handlers ---
@@ -856,6 +1045,7 @@ class SAMWidget(QWidget):
         self._unclear_checkbox.setEnabled(True)
         self._uncertain_checkbox.setEnabled(True)
         self._accept_selected_btn.setEnabled(True)
+        self._send_to_predict_btn.setEnabled(len(selected) == 1)
 
         # Unclear
         unclear_vals = features.loc[selected, "unclear"]
@@ -918,6 +1108,7 @@ class SAMWidget(QWidget):
         self._uncertain_checkbox.blockSignals(False)
 
         self._accept_selected_btn.setEnabled(False)
+        self._send_to_predict_btn.setEnabled(False)
         self._attr_status_label.setText("No annotation selected")
 
     def _set_tristate_checkbox(self, checkbox, values):
@@ -1503,20 +1694,108 @@ class SAMWidget(QWidget):
 
             path_to_item[cat_name] = item
 
+    def _browse_sam3_checkpoint(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select SAM3 Checkpoint",
+            "",
+            "PyTorch checkpoint (*.pt *.pth)",
+        )
+        if path:
+            self._sam3_ckpt_lineedit.setText(path)
+
+    def _load_sam3_model_internal(self):
+        """Load SAM3 model (HuggingFace auto or local checkpoint)."""
+        # Move SAM1 model off MPS/CUDA before loading SAM3 on CPU,
+        # so no MPS tensors remain that could contaminate SAM3 inference.
+        if self._sam_model is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self._sam_model.to("cpu")
+        self._sam_model = None
+        self.sam_predictor = None
+
+        # Revert previous pin_memory patch before applying a new one,
+        # so reload doesn't capture the patched version as the original.
+        if self._sam3_cleanup is not None:
+            self._sam3_cleanup()
+            self._sam3_cleanup = None
+
+        ckpt = self._sam3_ckpt_lineedit.text().strip() or None
+        try:
+            from ._utils import load_sam3_model
+
+            self._sam3_model, self._sam3_processor, self._sam3_cleanup = (
+                load_sam3_model(ckpt)
+            )
+        except ImportError as exc:
+            self._sam3_model = None
+            self._sam3_processor = None
+            self._sam3_inference_state = None
+            QMessageBox.critical(
+                self,
+                "SAM3 Not Installed",
+                f"sam3 package is not installed.\n\n"
+                f"Install with: uv sync --extra sam3\n\nDetail: {exc}",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._sam3_model = None
+            self._sam3_processor = None
+            self._sam3_inference_state = None
+            hint = (
+                f"Checkpoint: {ckpt}"
+                if ckpt
+                else (
+                    "Make sure you have requested access at:\n"
+                    "https://huggingface.co/facebook/sam3\n"
+                    "or specify a locally downloaded checkpoint."
+                )
+            )
+            QMessageBox.critical(
+                self,
+                "SAM3 Load Failed",
+                f"Failed to load SAM3 model.\n\n{hint}\n\nDetail: {exc}",
+            )
+            return
+        # Reset SAM1 state
+        self._sam_model = None
+        self.sam_predictor = None
+        is_manual = self._manual_mode_checkbox.isChecked()
+        self._sam3_prompt_group.setVisible(True)
+        self._sam3_prompt_group.setEnabled(not is_manual)
+        print("SAM3 loaded")
+        if self._image_layer_selection.currentText():
+            self._on_image_layer_changed(True)
+
     def _load_model(self):
         if self._use_api_checkbox.isChecked():
             print("Local model loading is not required in API mode")
             return
+
+        model_name = self._model_selection.currentText()
+        if model_name == "sam3":
+            self._load_sam3_model_internal()
+            return
+
         try:
             from segment_anything import SamPredictor
         except (ImportError, ModuleNotFoundError) as exc:
             print(f"Failed to import segment_anything: {exc}")
             return
 
-        model_name = self._model_selection.currentText()
         self._sam_model = load_model(model_name)
         self._sam_model.to(device=self.device)
         self.sam_predictor = SamPredictor(self._sam_model)
+        # Reset SAM3 state
+        if self._sam3_cleanup is not None:
+            self._sam3_cleanup()
+            self._sam3_cleanup = None
+        self._sam3_model = None
+        self._sam3_processor = None
+        self._sam3_inference_state = None
+        self._sam3_prompt_group.setVisible(False)
         print("model loaded")
         if self._image_layer_selection.currentText() != "":
             self._on_image_layer_changed(True)
@@ -1635,22 +1914,36 @@ class SAMWidget(QWidget):
             else:
                 self._current_slice = None
 
-        # Update SAM predictor (for local SAM mode, even
+        # Update predictor image (for local SAM/SAM3 mode, even
         # if in manual mode). Ensures predictor has correct
         # image when switching back to SAM mode.
-        if (
-            self.sam_predictor is not None
-            and image_layer is not None
-            and not self._use_api_checkbox.isChecked()
-        ):
-            self.sam_predictor.set_image(
-                preprocess(
-                    image_layer.data,
-                    self._image_type,
-                    self._current_slice,
-                )
+        if image_layer is not None and not self._use_api_checkbox.isChecked():
+            preprocessed = preprocess(
+                image_layer.data,
+                self._image_type,
+                self._current_slice,
             )
-            print("Set image for SAM predictor")
+            if self._sam3_processor is not None:
+                from PIL import Image as _PILImage
+
+                if preprocessed.dtype != np.uint8:
+                    lo = float(preprocessed.min())
+                    hi = float(preprocessed.max())
+                    if hi - lo > 0:
+                        preprocessed = (
+                            (preprocessed - lo) / (hi - lo) * 255
+                        ).astype(np.uint8)
+                    else:
+                        preprocessed = np.zeros_like(
+                            preprocessed, dtype=np.uint8
+                        )
+                self._sam3_inference_state = self._sam3_processor.set_image(
+                    _PILImage.fromarray(preprocessed)
+                )
+                print("SAM3: image set")
+            elif self.sam_predictor is not None:
+                self.sam_predictor.set_image(preprocessed)
+                print("Set image for SAM predictor")
 
         # In manual mode, resize SAM-Predict and return
         if self._manual_mode_checkbox.isChecked():
@@ -1719,8 +2012,37 @@ class SAMWidget(QWidget):
         else:
             self._predict_local()
 
+    def _predict_local_sam3(self):
+        """SAM3 SAM1-style single prediction (box prompt)."""
+        if self._sam3_inference_state is None or self._input_box is None:
+            return
+        masks, _, _ = self._sam3_model.predict_inst(
+            self._sam3_inference_state,
+            point_coords=None,
+            point_labels=None,
+            box=self._input_box[None, :],
+            multimask_output=False,
+        )
+        self._labels_layer.data = masks[0].astype("uint8")
+
+    def _pixel_box_to_sam3_norm_cxcywh(self, box_xyxy) -> list:
+        """Convert pixel [x1,y1,x2,y2] to SAM3 normalized CXCYWH list."""
+        from sam3.model.box_ops import box_xyxy_to_cxcywh
+
+        shape = self._get_image_shape()
+        if shape is None:
+            raise ValueError("No image layer selected")
+        H, W = shape
+        x1, y1, x2, y2 = (float(v) for v in box_xyxy)
+        xyxy = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
+        cxcywh = box_xyxy_to_cxcywh(xyxy)
+        norm = cxcywh / torch.tensor([W, H, W, H], dtype=torch.float32)
+        return norm.flatten().tolist()
+
     def _predict_local(self):
-        if self.sam_predictor is not None:
+        if self._sam3_processor is not None:
+            self._predict_local_sam3()
+        elif self.sam_predictor is not None:
             masks, _, _ = self.sam_predictor.predict(
                 point_coords=self._input_point,
                 point_labels=self._point_label,
@@ -1733,6 +2055,295 @@ class SAMWidget(QWidget):
             )
             self._labels_layer.data = masks[0] * 1
         self._viewer.layers.selection.active = self._labels_layer
+
+    def _accept_multi_masks(self, masks, class_str: str) -> int:
+        """Add N binary masks as polygons to the Accepted Shapes layer.
+
+        Masks whose bbox-IoU with an existing shape exceeds the
+        threshold set in ``_iou_threshold_spin`` are skipped.
+        """
+        output_name = self._shapes_layer_selection.currentText()
+        if not output_name:
+            return 0
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if not isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
+            return 0
+
+        self._ensure_features_columns(output_layer)
+        if not self._has_text_set(output_layer):
+            output_layer.text = {
+                "string": "{class}",
+                "anchor": "upper_left",
+                "size": self._settings["text_size"],
+                "color": self._settings["text_color"],
+            }
+
+        from skimage.measure import find_contours
+
+        iou_threshold = self._iou_threshold_spin.value()
+        same_class_only = self._iou_same_class_checkbox.isChecked()
+
+        # Pre-compute existing bboxes (inclusive int coords)
+        existing_bboxes = []
+        if iou_threshold > 0:
+            features = output_layer.features.reset_index(drop=True)
+            for i, poly in enumerate(output_layer.data):
+                if same_class_only:
+                    ex_class = str(features.iloc[i]["class"])
+                    if ex_class != class_str:
+                        continue
+                r_min, c_min = poly.min(axis=0)
+                r_max, c_max = poly.max(axis=0)
+                existing_bboxes.append(
+                    (
+                        math.floor(r_min),
+                        math.floor(c_min),
+                        math.ceil(r_max),
+                        math.ceil(c_max),
+                    )
+                )
+
+        count = 0
+        skipped = 0
+        for i in range(len(masks)):
+            m = masks[i]
+            if isinstance(m, torch.Tensor):
+                m = m.cpu().numpy()
+            m = m.squeeze().astype(bool)
+            if not m.any():
+                continue
+
+            # bbox-IoU check
+            if existing_bboxes and iou_threshold > 0:
+                rows, cols = np.where(m)
+                nr_min = int(rows.min())
+                nr_max = int(rows.max())
+                nc_min = int(cols.min())
+                nc_max = int(cols.max())
+                dup = False
+                for er, ec, er2, ec2 in existing_bboxes:
+                    ir_min = max(nr_min, er)
+                    ic_min = max(nc_min, ec)
+                    ir_max = min(nr_max, er2)
+                    ic_max = min(nc_max, ec2)
+                    if ir_min <= ir_max and ic_min <= ic_max:
+                        inter = (ir_max - ir_min + 1) * (ic_max - ic_min + 1)
+                    else:
+                        inter = 0
+                    a_new = (nr_max - nr_min + 1) * (nc_max - nc_min + 1)
+                    a_ex = (er2 - er + 1) * (ec2 - ec + 1)
+                    union = a_new + a_ex - inter
+                    if union > 0 and inter / union >= iou_threshold:
+                        dup = True
+                        break
+                if dup:
+                    skipped += 1
+                    continue
+
+            contours = find_contours(m)
+            if not contours:
+                continue
+            polygon = contours[0].astype(int)
+            output_layer.feature_defaults["class"] = class_str
+            for k, v in _ATTR_DEFAULTS.items():
+                if k != "class":
+                    output_layer.feature_defaults[k] = v
+            output_layer.add_polygons([polygon], edge_width=2)
+
+            # Add new bbox for subsequent duplicate checks
+            if iou_threshold > 0:
+                r_min, c_min = polygon.min(axis=0)
+                r_max, c_max = polygon.max(axis=0)
+                existing_bboxes.append(
+                    (
+                        int(r_min),
+                        int(c_min),
+                        int(r_max),
+                        int(c_max),
+                    )
+                )
+            count += 1
+
+        if skipped > 0:
+            print(f"SAM3: {skipped} masks skipped (IoU >= {iou_threshold})")
+        if count > 0:
+            output_layer.refresh_text()
+        return count
+
+    def _get_selected_exemplar_boxes(self) -> list:
+        """Return bbox [x1,y1,x2,y2] list from selected output shapes."""
+        output_name = self._shapes_layer_selection.currentText()
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if not isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
+            return []
+        selected = sorted(output_layer.selected_data)
+        if not selected:
+            return []
+        boxes = []
+        for idx in selected:
+            polygon = output_layer.data[idx]
+            r_min, c_min = polygon.min(axis=0).astype(float)
+            r_max, c_max = polygon.max(axis=0).astype(float)
+            boxes.append(np.array([c_min, r_min, c_max, r_max]))
+        return boxes
+
+    def _get_sam3_box_only_masks(self, inference_state):
+        """Return masks from inference_state after add_geometric_prompt.
+
+        Raises TypeError if inference_state is not a dict, or KeyError if
+        none of the candidate keys are found (to surface API mismatches
+        clearly rather than silently returning None).
+        """
+        _CANDIDATE_KEYS = ("pred_masks", "masks")
+
+        if not isinstance(inference_state, dict):
+            raise TypeError(
+                f"SAM3 Box-only: inference_state is "
+                f"{type(inference_state).__name__}, expected dict. "
+                "Check add_geometric_prompt() return type."
+            )
+        for key in _CANDIDATE_KEYS:
+            if key in inference_state and inference_state[key] is not None:
+                return inference_state[key]
+        raise KeyError(
+            f"SAM3 Box-only: none of {_CANDIDATE_KEYS} found in "
+            f"inference_state (keys={list(inference_state.keys())}). "
+            "Update _CANDIDATE_KEYS after checking "
+            "add_geometric_prompt() output."
+        )
+
+    def _on_sam3_detect_all(self):
+        """Detect All: accept all instances using selected prompt mode."""
+        if self._sam3_processor is None or self._sam3_inference_state is None:
+            print("SAM3 not loaded")
+            return
+
+        use_text = not self._sam3_prompt_box_radio.isChecked()
+        use_box = not self._sam3_prompt_text_radio.isChecked()
+
+        # ① Reset prompts upfront so early returns leave clean state
+        self._sam3_processor.reset_all_prompts(self._sam3_inference_state)
+
+        # ② Collect exemplar boxes (only when output layer is active)
+        output_name = self._shapes_layer_selection.currentText()
+        output_layer = self._get_layer_by_name_safe(output_name)
+        active = self._viewer.layers.selection.active
+        has_exemplar = (
+            use_box
+            and active is output_layer
+            and isinstance(output_layer, napari.layers.shapes.shapes.Shapes)
+        )
+        exemplar_boxes = (
+            self._get_selected_exemplar_boxes() if has_exemplar else []
+        )
+
+        # Collect all box sources
+        all_boxes = []
+        if use_box:
+            if self._input_box is not None:
+                all_boxes.append(self._input_box)
+            all_boxes.extend(exemplar_boxes)
+            if not all_boxes:
+                print(
+                    "Box mode: SAM-Box に矩形を描くか、"
+                    "出力 Shapes layer で shape を選択してください"
+                )
+                return
+
+        # ③ Determine class_str
+        if exemplar_boxes:
+            self._ensure_features_columns(output_layer)
+            selected = sorted(output_layer.selected_data)
+            classes = {
+                str(output_layer.features.at[idx, "class"]) for idx in selected
+            }
+            if len(classes) > 1:
+                print(
+                    "Detect All: 選択 shape のクラスが混在しています。"
+                    "同じクラスの shape のみ選択してください"
+                )
+                return
+            class_str = classes.pop()
+        else:
+            class_str = self._get_selected_class()
+        text = (
+            str(class_str).split(": ", 1)[-1].split("-")[-1].strip()
+            if class_str
+            else ""
+        )
+
+        # ④ Add box prompts
+        if use_box:
+            for box_xyxy in all_boxes:
+                norm_box = self._pixel_box_to_sam3_norm_cxcywh(box_xyxy)
+                self._sam3_inference_state = (
+                    self._sam3_processor.add_geometric_prompt(
+                        state=self._sam3_inference_state,
+                        box=norm_box,
+                        label=True,
+                    )
+                )
+
+        # ⑤ Run inference
+        if use_text:
+            output = self._sam3_processor.set_text_prompt(
+                state=self._sam3_inference_state, prompt=text
+            )
+            masks = output.get("masks")
+        else:
+            try:
+                masks = self._get_sam3_box_only_masks(
+                    self._sam3_inference_state
+                )
+            except (TypeError, KeyError) as exc:
+                QMessageBox.critical(
+                    self,
+                    "SAM3 Box-only Error",
+                    f"Box-only マスクの取得に失敗しました。\n\n"
+                    f"Detail: {exc}\n\n"
+                    "sam3 の API が変わった可能性があります。"
+                    "_get_sam3_box_only_masks() の "
+                    "_CANDIDATE_KEYS を確認してください。",
+                )
+                return
+
+        if masks is None or len(masks) == 0:
+            print("SAM3: no objects detected")
+            return
+
+        n = self._accept_multi_masks(masks, class_str)
+        self._sam_box_layer.data = []
+        self._input_box = None
+        self._labels_layer.data = np.zeros_like(self._labels_layer.data)
+        self._sam3_processor.reset_all_prompts(self._sam3_inference_state)
+        print(f"SAM3 Detect All: {n} objects accepted as '{class_str}'")
+
+    def _send_selected_to_predict(self):
+        """Move selected Accepted shape back to SAM-Predict for editing."""
+        output_name = self._shapes_layer_selection.currentText()
+        output_layer = self._get_layer_by_name_safe(output_name)
+        if not isinstance(output_layer, napari.layers.shapes.shapes.Shapes):
+            return
+
+        selected = list(output_layer.selected_data)
+        if len(selected) != 1:
+            print("1つの shape を選択してください")
+            return
+
+        idx = selected[0]
+        polygon = output_layer.data[idx]
+        H, W = self._labels_layer.data.shape
+
+        from skimage.draw import polygon2mask as _polygon2mask
+
+        mask = _polygon2mask((H, W), polygon).astype("uint8")
+        self._labels_layer.data = mask
+        output_layer.selected_data = {idx}
+        output_layer.remove_selected()
+        self._viewer.layers.selection.active = self._labels_layer
+        print(
+            "Shape を SAM-Predict に送りました。A で再 Accept してください。"
+        )
 
     def _predict_api(self):
         """Execute prediction using API"""
