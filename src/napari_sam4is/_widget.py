@@ -723,7 +723,7 @@ class SAMWidget(QWidget):
             code = frame.f_code
             if (
                 code.co_name == "clear"
-                and code.co_filename == "<frozen _collections_abc>"
+                and "_collections_abc" in code.co_filename
             ):
                 return True
             frame = frame.f_back
