@@ -1680,10 +1680,10 @@ class SAMWidget(QWidget):
         # Move SAM1 model off MPS/CUDA before loading SAM3 on CPU,
         # so no MPS tensors remain that could contaminate SAM3 inference.
         if self._sam_model is not None:
-            try:
+            import contextlib
+
+            with contextlib.suppress(Exception):
                 self._sam_model.to("cpu")
-            except Exception:
-                pass
         self._sam_model = None
         self.sam_predictor = None
 

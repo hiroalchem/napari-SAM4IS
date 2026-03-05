@@ -333,10 +333,8 @@ def load_sam3_model(checkpoint_path: str | None = None):
 
     import torch
 
-    if torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"  # MPS not yet supported by sam3
+    # MPS not yet supported by sam3
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Temporarily set default device to "cpu" so that sam3 submodules
     # (e.g. build_tracker) that don't accept a device argument cannot
