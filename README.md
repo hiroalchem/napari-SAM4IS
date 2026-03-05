@@ -52,30 +52,47 @@ pip install git+https://github.com/hiroalchem/napari-SAM4IS.git
 
 ### Step 2: Install Segment Anything Model (Optional - for local model usage)
 
-**Note**: Installing the Segment Anything Model is only required if you plan to use local models. If you're using the API mode, you can skip this step.
+**Note**: Installing a SAM model is only required if you plan to use local models. If you're using the API mode, you can skip this step.
 
-To use local models, install SAM:
+#### SAM 1 (vit_h / vit_l / vit_b)
 
 ```bash
 pip install git+https://github.com/facebookresearch/segment-anything.git
 ```
 
-Or you can install from source by cloning the repository:
+For more detailed instructions, please refer to the [SAM installation guide](https://github.com/facebookresearch/segment-anything#installation).
+
+#### SAM 3
+
+SAM 3 requires a patched fork for macOS compatibility. Install with:
 
 ```bash
-git clone https://github.com/facebookresearch/segment-anything.git
-cd segment-anything
-pip install -e .
+pip install git+https://github.com/hiroalchem/sam3.git@patched-macos
 ```
 
-For more detailed instructions, please refer to the [SAM installation guide](https://github.com/facebookresearch/segment-anything#installation).
+If you use [uv](https://docs.astral.sh/uv/), sam3 and its dependencies are resolved automatically:
+
+```bash
+uv sync --extra sam3
+```
+
+SAM 3 also requires the following packages (installed automatically with uv, manually with pip):
+
+```bash
+pip install "numpy>=1.26" "timm>=1.0.17" "einops>=0.8,<0.9" "huggingface-hub>=0.30,<1" "av>=12" "pycocotools>=2"
+```
+
+> **Important**: Before using SAM 3, you must request access to the checkpoints on the [SAM 3 Hugging Face repo](https://huggingface.co/facebook/sam3). Once accepted, you need to be authenticated (e.g., `huggingface-cli login`) to download the checkpoints automatically.
+>
+> Alternatively, you can download `sam3.pt` manually and specify the local path in the plugin's checkpoint field.
 
 ## Usage
 ### Preparation
 1. Open an image in napari and launch the plugin. (Opening an image after launching the plugin is also possible.)
 2. Upon launching the plugin, several layers will be automatically created: SAM-Box, SAM-Positive, SAM-Negative, SAM-Predict, and Accepted. The usage of these layers will be explained later.
 3. Choose between local model or API mode:
-   - **Local Model Mode**: Select the model you want to use and click the load button. (The default option is recommended.)
+   - **Local Model Mode (SAM 1)**: Select the model you want to use and click the load button. (The default option is recommended.)
+   - **Local Model Mode (SAM 3)**: Select "SAM3" from the model dropdown. The model weights will be downloaded automatically from HuggingFace (gated access required), or you can specify a local checkpoint path.
    - **API Mode**: Check the "Use API" checkbox, then enter your API URL and API Key. No model loading is required. This mode is designed to work with the SAM API provided by [LPIXEL Inc.](https://lpixel.net/) via [IMACEL](https://imacel.net/). For API access, please contact [IMACEL](https://imacel.net/contact) directly.
 4. Next, select the image layer you want to annotate.
 5. Then, select whether you want to do instance segmentation or semantic segmentation. (Note that for 3D images, semantic segmentation should be chosen in the current version.)
@@ -121,6 +138,21 @@ You can define annotation classes to assign to each segmented object. Classes su
 6. If you accept the annotation, it will be output as label 1 for semantic segmentation or converted to a polygon and output to the designated layer for instance segmentation. The currently selected class will be assigned to the annotation.
 7. If you reject the annotation, the segmentation mask in the SAM-Predict layer will be discarded.
 8. After accepting or rejecting the annotation, the SAM-Predict layer will automatically reset to blank and return to the SAM-Box layer.
+
+### SAM 3: Detect All
+
+When using SAM 3, additional features are available for batch detection:
+
+1. **Prompt Modes**: Choose between Text, Box, or Text+Box prompts using the radio buttons in the SAM3 Prompt section.
+2. **Box prompt**: Draw a bounding box on the SAM-Box layer, then click **Detect All** to detect all instances within the box.
+3. **Text prompt**: Enter a class name or description as the text prompt. The text is derived from the currently selected class name.
+4. **Exemplar-based detection**: Select one or more shapes in the output Shapes layer (e.g., Accepted), then click **Detect All**. The selected shapes are used as exemplar box prompts. This is useful for finding similar objects across the image.
+   - The output Shapes layer must be the active layer for exemplar selection to take effect.
+   - All selected exemplar shapes must belong to the same class.
+   - Exemplar boxes and SAM-Box input can be combined.
+5. **IoU duplicate filtering**: To prevent overlapping annotations, the plugin automatically filters out masks that overlap with existing shapes above a configurable IoU threshold (default: 0.5).
+   - Adjust the threshold using the **IoU Threshold** spinner.
+   - Check **Same class only** to only filter duplicates within the same class, or uncheck it to filter across all classes.
 
 ### Manual Annotation (without SAM)
 You can also annotate without using SAM by enabling **Manual Mode**.
