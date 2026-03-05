@@ -20,7 +20,7 @@ MODEL_URLS = {
 
 def get_available_model_names():
     """Return model names without importing heavy dependencies."""
-    return list(MODEL_URLS.keys())
+    return list(MODEL_URLS.keys()) + ["sam3"]
 
 
 def load_model(model_name: str = "default"):
@@ -307,6 +307,98 @@ def find_first_missing(arr):
         if index[0] != value:
             return index[0]
     return len(arr)
+
+
+def load_sam3_model(checkpoint_path: str | None = None):
+    """Load SAM3 model (HuggingFace auto or local checkpoint).
+
+    Args:
+        checkpoint_path: Path to locally downloaded sam3.pt.
+            If None, downloads from HuggingFace (gated access required).
+
+    Returns:
+        tuple: (model, processor)
+
+    Raises:
+        ImportError: sam3 not installed
+        Exception: any error during model load
+    """
+    try:
+        from sam3 import build_sam3_image_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ImportError(
+            "sam3 is not installed. Install with: uv sync --extra sam3"
+        ) from exc
+
+    import torch
+
+    if torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"  # MPS not yet supported by sam3
+
+    # Temporarily set default device to "cpu" so that sam3 submodules
+    # (e.g. build_tracker) that don't accept a device argument cannot
+    # accidentally inherit MPS from a previously loaded SAM1 model.
+    _prev_default = torch.get_default_device()
+    torch.set_default_device("cpu")
+    try:
+        if checkpoint_path:
+            model = build_sam3_image_model(
+                enable_inst_interactivity=True,
+                load_from_HF=False,
+                checkpoint_path=checkpoint_path,
+                device=device,
+            )
+        else:
+            model = build_sam3_image_model(
+                enable_inst_interactivity=True,
+                load_from_HF=True,
+                device=device,
+            )
+    finally:
+        torch.set_default_device(_prev_default)
+
+    # _setup_device_and_mode only handles "cuda"; move to CPU explicitly.
+    # Force all parameters to cpu to avoid MPS leakage on macOS Apple Silicon.
+    if device != "cuda":
+        model.to("cpu")
+
+    # Confirm the actual device from model parameters (model.device is a
+    # dynamic property: next(self.parameters()).device).
+    actual_device = str(next(model.parameters()).device)
+
+    # sam3 geometry_encoders.py:648 calls pin_memory().to(device=..., non_blocking=True)
+    # which raises RuntimeError on MPS ("Attempted to set storage on device cpu to mps:0")
+    # because pin_memory() is CUDA-only.  Monkey-patch Tensor.pin_memory to be a no-op
+    # on non-CUDA platforms so sam3 works on macOS Apple Silicon.
+    # The patch must stay active during inference, so we return a cleanup
+    # callable for the caller to invoke when the model is unloaded.
+    cleanup = None
+    if not torch.cuda.is_available():
+        # Capture the *real* original once; reloads must not snapshot the
+        # already-patched version.
+        if not hasattr(load_sam3_model, "_orig_pin_memory"):
+            load_sam3_model._orig_pin_memory = torch.Tensor.pin_memory
+        _orig = load_sam3_model._orig_pin_memory
+
+        def _safe_pin_memory(self, device=None):
+            return self
+
+        torch.Tensor.pin_memory = _safe_pin_memory
+
+        def cleanup():  # noqa: E306
+            torch.Tensor.pin_memory = _orig
+
+        try:
+            processor = Sam3Processor(model, device=actual_device)
+        except Exception:
+            cleanup()
+            raise
+    else:
+        processor = Sam3Processor(model, device=actual_device)
+    return model, processor, cleanup
 
 
 def find_missing_class_number(numbers):

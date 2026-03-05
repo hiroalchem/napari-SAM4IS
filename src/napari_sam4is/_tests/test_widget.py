@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 
 import numpy as np
@@ -995,3 +996,514 @@ def test_json_unicode_roundtrip():
         assert "\\u" not in raw
     finally:
         os.unlink(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# SAM3 tests
+# ---------------------------------------------------------------------------
+
+
+def test_model_selection_includes_sam3(make_napari_viewer):
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    items = [
+        widget._model_selection.itemText(i)
+        for i in range(widget._model_selection.count())
+    ]
+    assert "sam3" in items
+
+
+def test_load_sam3_model_import_error(make_napari_viewer):
+    from unittest.mock import patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    with (
+        patch(
+            "napari_sam4is._utils.load_sam3_model",
+            side_effect=ImportError("sam3 not installed"),
+        ),
+        patch("napari_sam4is._widget.QMessageBox") as mock_mb,
+    ):
+        widget._model_selection.setCurrentText("sam3")
+        widget._load_model()
+        assert widget._sam3_processor is None
+        mock_mb.critical.assert_called_once()
+
+
+def test_pixel_box_to_sam3_norm_cxcywh(make_napari_viewer):
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    mock_box_ops = MagicMock()
+    mock_viz_utils = MagicMock()
+
+    def _xyxy_to_cxcywh(t):
+        x1, y1, x2, y2 = t[0].tolist()
+        return torch.tensor([[(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]])
+
+    def _norm(t, W, H):
+        return t / torch.tensor([W, H, W, H], dtype=torch.float32)
+
+    mock_box_ops.box_xyxy_to_cxcywh = _xyxy_to_cxcywh
+    mock_viz_utils.normalize_bbox = _norm
+    mock_model = MagicMock()
+    mock_model.box_ops = mock_box_ops
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model": mock_model,
+            "sam3.model.box_ops": mock_box_ops,
+            "sam3.visualization_utils": mock_viz_utils,
+        },
+    ):
+        viewer = make_napari_viewer()
+        viewer.add_image(np.random.random((100, 200)))  # H=100, W=200
+        widget = SAMWidget(viewer)
+        widget._sam3_processor = MagicMock()
+        # [x1,y1,x2,y2]=[10,20,110,70]
+        # → cx=60,cy=45,w=100,h=50 → norm by W=200,H=100: [0.3, 0.45, 0.5, 0.5]
+        result = widget._pixel_box_to_sam3_norm_cxcywh(
+            np.array([10.0, 20.0, 110.0, 70.0])
+        )
+        assert len(result) == 4
+        assert abs(result[0] - 0.3) < 1e-4
+        assert abs(result[1] - 0.45) < 1e-4
+
+
+def test_accept_multi_masks(make_napari_viewer):
+    torch = pytest.importorskip("torch")
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._radio_btn_shape.setChecked(True)
+    masks = torch.zeros(2, 1, 100, 100)
+    masks[0, 0, 10:30, 10:30] = 1
+    masks[1, 0, 50:70, 50:70] = 1
+    n = widget._accept_multi_masks(masks, "0: dog")
+    assert n == 2
+    assert len(widget._accepted_layer.data) == 2
+
+
+def test_detect_all_text_mode(make_napari_viewer):
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    mock_proc = MagicMock()
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    mock_proc.set_text_prompt.return_value = {
+        "masks": fake_masks,
+        "boxes": None,
+        "scores": None,
+    }
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_text_radio.setChecked(True)
+    widget._on_sam3_detect_all()
+    mock_proc.set_text_prompt.assert_called_once()
+    mock_proc.add_geometric_prompt.assert_not_called()
+    assert len(widget._accepted_layer.data) == 1
+
+
+def test_detect_all_box_mode(make_napari_viewer):
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    geo_result = {"pred_masks": fake_masks}
+    mock_proc = MagicMock()
+    mock_proc.add_geometric_prompt.return_value = geo_result
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = np.array([10.0, 10.0, 50.0, 50.0])
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_box_radio.setChecked(True)
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model.box_ops": MagicMock(),
+            "sam3.visualization_utils": MagicMock(),
+        },
+    ):
+        widget._on_sam3_detect_all()
+    mock_proc.add_geometric_prompt.assert_called_once()
+    mock_proc.set_text_prompt.assert_not_called()
+    assert len(widget._accepted_layer.data) == 1
+
+
+def test_detect_all_text_box_mode(make_napari_viewer):
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    mock_proc = MagicMock()
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    mock_proc.set_text_prompt.return_value = {
+        "masks": fake_masks,
+        "boxes": None,
+        "scores": None,
+    }
+    mock_proc.add_geometric_prompt.return_value = {}
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = np.array([10.0, 10.0, 50.0, 50.0])
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_both_radio.setChecked(True)
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model.box_ops": MagicMock(),
+            "sam3.visualization_utils": MagicMock(),
+        },
+    ):
+        widget._on_sam3_detect_all()
+    mock_proc.add_geometric_prompt.assert_called_once()
+    mock_proc.set_text_prompt.assert_called_once()
+    assert len(widget._accepted_layer.data) == 1
+
+
+def test_send_selected_to_predict(make_napari_viewer):
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    polygon = np.array([[10, 10], [10, 40], [40, 40], [40, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._accepted_layer.selected_data = {0}
+    widget._shapes_layer_selection.setCurrentText("Accepted")
+    widget._send_selected_to_predict()
+    assert len(widget._accepted_layer.data) == 0
+    assert widget._labels_layer.data.any()
+
+
+def test_detect_all_box_mode_key_error(make_napari_viewer):
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    mock_proc = MagicMock()
+    mock_proc.add_geometric_prompt.return_value = {}
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = np.array([10.0, 10.0, 50.0, 50.0])
+    widget._sam3_prompt_box_radio.setChecked(True)
+    with (
+        patch("napari_sam4is._widget.QMessageBox") as mock_mb,
+        patch.dict(
+            sys.modules,
+            {
+                "sam3": MagicMock(),
+                "sam3.utils": MagicMock(),
+                "sam3.utils.misc": MagicMock(),
+            },
+        ),
+    ):
+        widget._on_sam3_detect_all()
+    mock_mb.critical.assert_called_once()
+    assert len(widget._accepted_layer.data) == 0
+
+
+def test_set_attr_ui_disabled_disables_buttons(make_napari_viewer):
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._send_to_predict_btn.setEnabled(True)
+    widget._set_attr_ui_disabled()
+    assert not widget._send_to_predict_btn.isEnabled()
+
+
+def test_detect_all_box_mode_with_exemplar(make_napari_viewer):
+    """Exemplar boxes from selected output shapes are used."""
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    geo_result = {"pred_masks": fake_masks}
+    mock_proc = MagicMock()
+    mock_proc.add_geometric_prompt.return_value = geo_result
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = None
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_box_radio.setChecked(True)
+
+    # Add a polygon to accepted layer and select it
+    polygon = np.array([[10, 10], [10, 50], [30, 50], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "1: cell"
+    widget._accepted_layer.selected_data = {0}
+    widget._shapes_layer_selection.setCurrentText("Accepted")
+    # Make accepted layer active
+    viewer.layers.selection.active = widget._accepted_layer
+
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model.box_ops": MagicMock(),
+            "sam3.visualization_utils": MagicMock(),
+        },
+    ):
+        widget._on_sam3_detect_all()
+    mock_proc.add_geometric_prompt.assert_called_once()
+    mock_proc.set_text_prompt.assert_not_called()
+
+
+def test_detect_all_box_mode_combined(make_napari_viewer):
+    """Both _input_box and exemplar shapes are used as box prompts."""
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    geo_result = {"pred_masks": fake_masks}
+    mock_proc = MagicMock()
+    mock_proc.add_geometric_prompt.return_value = geo_result
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = np.array([5.0, 5.0, 40.0, 40.0])
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_box_radio.setChecked(True)
+
+    polygon = np.array([[10, 10], [10, 50], [30, 50], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "1: cell"
+    widget._accepted_layer.selected_data = {0}
+    widget._shapes_layer_selection.setCurrentText("Accepted")
+    viewer.layers.selection.active = widget._accepted_layer
+
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model.box_ops": MagicMock(),
+            "sam3.visualization_utils": MagicMock(),
+        },
+    ):
+        widget._on_sam3_detect_all()
+    # 2 calls: one for _input_box, one for exemplar
+    assert mock_proc.add_geometric_prompt.call_count == 2
+
+
+def test_detect_all_ignores_exemplar_when_not_active(
+    make_napari_viewer,
+):
+    """Exemplar shapes are ignored when output layer is not active."""
+    torch = pytest.importorskip("torch")
+    from unittest.mock import MagicMock, patch
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    fake_masks = torch.zeros(1, 1, 100, 100)
+    fake_masks[0, 0, 10:30, 10:30] = 1
+    geo_result = {"pred_masks": fake_masks}
+    mock_proc = MagicMock()
+    mock_proc.add_geometric_prompt.return_value = geo_result
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = np.array([5.0, 5.0, 40.0, 40.0])
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_box_radio.setChecked(True)
+
+    polygon = np.array([[10, 10], [10, 50], [30, 50], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._accepted_layer.selected_data = {0}
+    widget._shapes_layer_selection.setCurrentText("Accepted")
+    # Keep a different layer active (not Accepted)
+    viewer.layers.selection.active = widget._sam_box_layer
+
+    with patch.dict(
+        sys.modules,
+        {
+            "sam3": MagicMock(),
+            "sam3.model.box_ops": MagicMock(),
+            "sam3.visualization_utils": MagicMock(),
+        },
+    ):
+        widget._on_sam3_detect_all()
+    # Only _input_box used, not exemplar
+    assert mock_proc.add_geometric_prompt.call_count == 1
+
+
+def test_detect_all_no_box_no_exemplar(make_napari_viewer, capsys):
+    """Error message when no box source is available."""
+    pytest.importorskip("torch")
+    from unittest.mock import MagicMock
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    mock_proc = MagicMock()
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = None
+    widget._sam3_prompt_box_radio.setChecked(True)
+    widget._on_sam3_detect_all()
+    captured = capsys.readouterr()
+    assert "SAM-Box" in captured.out
+
+
+def test_detect_all_exemplar_mixed_classes(make_napari_viewer, capsys):
+    """Mixed-class exemplars produce an error message."""
+    pytest.importorskip("torch")
+    from unittest.mock import MagicMock
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    mock_proc = MagicMock()
+    widget._sam3_processor = mock_proc
+    widget._sam3_inference_state = {}
+    widget._sam3_model = MagicMock()
+    widget._input_box = None
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_box_radio.setChecked(True)
+
+    p1 = np.array([[10, 10], [10, 30], [30, 30], [30, 10]])
+    p2 = np.array([[40, 40], [40, 60], [60, 60], [60, 40]])
+    widget._accepted_layer.add_polygons([p1, p2])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "1: cell"
+    widget._accepted_layer.features.at[1, "class"] = "2: bg"
+    widget._accepted_layer.selected_data = {0, 1}
+    widget._shapes_layer_selection.setCurrentText("Accepted")
+    viewer.layers.selection.active = widget._accepted_layer
+
+    widget._on_sam3_detect_all()
+    captured = capsys.readouterr()
+    assert "混在" in captured.out
+    # No prompts should have been added after reset
+    mock_proc.add_geometric_prompt.assert_not_called()
+
+
+def test_accept_multi_masks_iou_filtering(make_napari_viewer):
+    """Masks overlapping existing shapes above IoU threshold are skipped."""
+    torch = pytest.importorskip("torch")
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._radio_btn_shape.setChecked(True)
+    widget._iou_threshold_spin.setValue(0.5)
+    widget._iou_same_class_checkbox.setChecked(False)
+
+    # Add existing polygon covering [10:30, 10:30]
+    polygon = np.array([[10, 10], [10, 30], [30, 30], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "1: cell"
+
+    # Mask that overlaps significantly with existing
+    m1 = torch.zeros(1, 1, 100, 100)
+    m1[0, 0, 10:30, 10:30] = 1  # same region
+    # Mask that doesn't overlap
+    m2 = torch.zeros(1, 1, 100, 100)
+    m2[0, 0, 60:80, 60:80] = 1
+    masks = torch.cat([m1, m2], dim=0)
+
+    n = widget._accept_multi_masks(masks, "1: cell")
+    assert n == 1  # only m2 accepted
+
+
+def test_accept_multi_masks_iou_same_class_only(make_napari_viewer):
+    """Same-class-only IoU skips only same-class overlaps."""
+    torch = pytest.importorskip("torch")
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._radio_btn_shape.setChecked(True)
+    widget._iou_threshold_spin.setValue(0.5)
+    widget._iou_same_class_checkbox.setChecked(True)
+
+    # Existing polygon with different class
+    polygon = np.array([[10, 10], [10, 30], [30, 30], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "2: bg"
+
+    # Mask that overlaps existing but is a different class
+    m1 = torch.zeros(1, 1, 100, 100)
+    m1[0, 0, 10:30, 10:30] = 1
+
+    n = widget._accept_multi_masks(m1, "1: cell")
+    # Should be accepted because existing is class "2: bg"
+    assert n == 1
+
+
+def test_accept_multi_masks_iou_all_classes(make_napari_viewer):
+    """Cross-class IoU skips overlaps regardless of class."""
+    torch = pytest.importorskip("torch")
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._radio_btn_shape.setChecked(True)
+    widget._iou_threshold_spin.setValue(0.5)
+    widget._iou_same_class_checkbox.setChecked(False)
+
+    polygon = np.array([[10, 10], [10, 30], [30, 30], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "2: bg"
+
+    m1 = torch.zeros(1, 1, 100, 100)
+    m1[0, 0, 10:30, 10:30] = 1
+
+    n = widget._accept_multi_masks(m1, "1: cell")
+    # Should be skipped because IoU is high regardless of class
+    assert n == 0
+
+
+def test_accept_multi_masks_iou_zero(make_napari_viewer):
+    """IoU threshold of 0 disables filtering."""
+    torch = pytest.importorskip("torch")
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._radio_btn_shape.setChecked(True)
+    widget._iou_threshold_spin.setValue(0.0)
+
+    polygon = np.array([[10, 10], [10, 30], [30, 30], [30, 10]])
+    widget._accepted_layer.add_polygons([polygon])
+    widget._ensure_features_columns(widget._accepted_layer)
+    widget._accepted_layer.features.at[0, "class"] = "1: cell"
+
+    m1 = torch.zeros(1, 1, 100, 100)
+    m1[0, 0, 10:30, 10:30] = 1
+
+    n = widget._accept_multi_masks(m1, "1: cell")
+    # No filtering, so should be accepted
+    assert n == 1
