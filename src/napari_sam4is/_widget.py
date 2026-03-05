@@ -1,4 +1,5 @@
 import base64
+import inspect
 import io
 import json
 import math
@@ -703,12 +704,30 @@ class SAMWidget(QWidget):
             if layer_id in self._connected_layers:
                 self._connected_layers.remove(layer_id)
 
-        # Restore any critical layer that was deleted
-        if removed is not None:
+        # Skip restore during bulk clear (e.g. viewer.close -> layers.clear)
+        # to avoid re-adding layers while teardown is actively removing them.
+        if removed is not None and not self._is_layer_clear_in_progress():
             self._restore_critical_layer_if_needed(removed)
 
         # Refresh layer selections
         self._refresh_layer_selections()
+
+    @staticmethod
+    def _is_layer_clear_in_progress():
+        """Return True when current call stack is inside MutableSequence.clear."""
+        frame = inspect.currentframe()
+        if frame is None:
+            return False
+        frame = frame.f_back
+        while frame is not None:
+            code = frame.f_code
+            if (
+                code.co_name == "clear"
+                and code.co_filename == "<frozen _collections_abc>"
+            ):
+                return True
+            frame = frame.f_back
+        return False
 
     def _restore_critical_layer_if_needed(self, removed_layer):
         """Re-create a critical layer if it was deleted by the user."""
