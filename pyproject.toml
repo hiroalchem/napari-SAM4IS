@@ -59,19 +59,9 @@ dev = [
     "ruff>=0.8.0,<1.0",
     "pre-commit",
 ]
-# SAM 1: install segment-anything separately (git dep, not PyPI-compatible).
-#   pip install git+https://github.com/facebookresearch/segment-anything.git
-# SAM 3: sam3 itself is resolved via [tool.uv.sources] for uv users.
-#   For pip users, install sam3 fork manually — see README.md.
-sam3 = [
-    "sam3>=0.1.0",
-    "numpy>=1.26.0",
-    "timm>=1.0.17",
-    "einops>=0.8.0,<0.9.0",
-    "huggingface-hub>=0.30.0,<1.0",
-    "av>=12.0",
-    "pycocotools>=2.0",
-]
+# SAM 1 and SAM 3 require git-based packages (not PyPI-compatible).
+# Install them separately — see README.md for instructions.
+# For uv users: uv sync --group sam3  (resolves via [tool.uv.sources])
 
 [project.entry-points."napari.manifest"]
 napari-SAM4IS = "napari_sam4is:napari.yaml"
@@ -97,6 +87,15 @@ sam3 = { git = "https://github.com/hiroalchem/sam3.git", rev = "cac46f9caf87d76e
 [dependency-groups]
 dev = [
     "PySide6",  # napari GUI backend; not auto-installed by uv sync
+]
+sam3 = [
+    "sam3>=0.1.0",
+    "numpy>=1.26.0",
+    "timm>=1.0.17",
+    "einops>=0.8.0,<0.9.0",
+    "huggingface-hub>=0.30.0,<1.0",
+    "av>=12.0",
+    "pycocotools>=2.0",
 ]
 
 [tool.black]

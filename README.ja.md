@@ -65,7 +65,7 @@ pip install git+https://github.com/hiroalchem/sam3.git@patched-macos
 [uv](https://docs.astral.sh/uv/) を使用する場合、sam3 とその依存パッケージが自動的に解決されます:
 
 ```bash
-uv sync --extra sam3
+uv sync --group sam3
 ```
 
 pip の場合は以下の依存パッケージも手動でインストールしてください:
