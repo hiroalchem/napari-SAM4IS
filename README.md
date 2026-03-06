@@ -82,9 +82,10 @@ SAM 3 also requires the following packages (installed automatically with uv, man
 pip install "numpy>=1.26" "timm>=1.0.17" "einops>=0.8,<0.9" "huggingface-hub>=0.30,<1" "av>=12" "pycocotools>=2"
 ```
 
-> **Important**: Before using SAM 3, you must request access to the checkpoints on the [SAM 3 Hugging Face repo](https://huggingface.co/facebook/sam3). Once accepted, you need to be authenticated (e.g., `huggingface-cli login`) to download the checkpoints automatically.
+> **Important**: Before using SAM 3, you must request access to the checkpoints on the [SAM 3 Hugging Face repo](https://huggingface.co/facebook/sam3).
 >
-> Alternatively, you can download `sam3.pt` manually and specify the local path in the plugin's checkpoint field.
+> - **Automatic download**: Run `huggingface-cli login` to authenticate, then leave the checkpoint field empty and click the Load button. The weights will be downloaded automatically.
+> - **Manual download**: Download `sam3.pt` from the HuggingFace repo and specify the local path in the plugin's checkpoint field.
 
 ## Usage
 ### Preparation
