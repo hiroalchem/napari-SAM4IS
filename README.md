@@ -151,6 +151,9 @@ When using SAM 3, additional features are available for batch detection:
    - The output Shapes layer must be the active layer for exemplar selection to take effect.
    - All selected exemplar shapes must belong to the same class.
    - Exemplar boxes and SAM-Box input can be combined.
+
+   https://github.com/user-attachments/assets/daee138c-1185-428f-a787-71a53fffcee6
+
 5. **IoU duplicate filtering**: To prevent overlapping annotations, the plugin automatically filters out masks that overlap with existing shapes above a configurable IoU threshold (default: 0.5).
    - Adjust the threshold using the **IoU Threshold** spinner.
    - Check **Same class only** to only filter duplicates within the same class, or uncheck it to filter across all classes.
