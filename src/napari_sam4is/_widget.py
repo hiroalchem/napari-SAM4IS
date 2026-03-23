@@ -584,12 +584,16 @@ class SAMWidget(QWidget):
         self._model_selection.setEnabled(not is_checked)
         self._model_load_btn.setEnabled(not is_checked)
 
-        # SAM3 is local-only: hide its UI elements in API mode
+        # SAM3 checkpoint is local-only: hide in API mode
         self._sam3_ckpt_widget.setVisible(
-            not is_checked and self._model_selection.currentText() == "sam3"
+            not is_checked
+            and self._model_selection.currentText() == "sam3"
         )
+        # SAM3 prompt group: show in API mode for detect_all support
+        is_sam3 = self._model_selection.currentText() == "sam3"
         self._sam3_prompt_group.setVisible(
-            not is_checked and self._sam3_processor is not None
+            is_sam3
+            and (is_checked or self._sam3_processor is not None)
         )
 
     def _get_image_shape(self):
@@ -2214,6 +2218,9 @@ class SAMWidget(QWidget):
 
     def _on_sam3_detect_all(self):
         """Detect All: accept all instances using selected prompt mode."""
+        if self._use_api_checkbox.isChecked():
+            self._detect_all_api()
+            return
         if self._sam3_processor is None or self._sam3_inference_state is None:
             print("SAM3 not loaded")
             return
@@ -2344,6 +2351,223 @@ class SAMWidget(QWidget):
         print(
             "Shape を SAM-Predict に送りました。A で再 Accept してください。"
         )
+
+    def _detect_all_api(self):
+        """Execute Detect All using API."""
+        try:
+            api_url = self._api_url_input.text().strip()
+            api_key = self._api_key_input.text().strip()
+            if not api_url or not api_key:
+                print("Error: API URL and API Key required")
+                return
+
+            # Determine prompt mode from radio buttons
+            if self._sam3_prompt_text_radio.isChecked():
+                prompt_mode = "text"
+            elif self._sam3_prompt_box_radio.isChecked():
+                prompt_mode = "box"
+            else:
+                prompt_mode = "text_and_box"
+
+            use_text = prompt_mode in ("text", "text_and_box")
+            use_box = prompt_mode in ("box", "text_and_box")
+
+            # Collect exemplar boxes
+            all_boxes = []
+            if use_box:
+                if self._input_box is not None:
+                    all_boxes.append(self._input_box)
+                output_name = (
+                    self._shapes_layer_selection.currentText()
+                )
+                output_layer = self._get_layer_by_name_safe(
+                    output_name
+                )
+                active = self._viewer.layers.selection.active
+                if (
+                    active is output_layer
+                    and isinstance(
+                        output_layer,
+                        napari.layers.shapes.shapes.Shapes,
+                    )
+                ):
+                    all_boxes.extend(
+                        self._get_selected_exemplar_boxes()
+                    )
+                if not all_boxes:
+                    print(
+                        "Box mode: SAM-Box に矩形を描くか、"
+                        "出力 Shapes layer で shape を選択して"
+                        "ください"
+                    )
+                    return
+
+            # Determine class name
+            exemplar_boxes_raw = (
+                self._get_selected_exemplar_boxes()
+                if use_box
+                else []
+            )
+            if exemplar_boxes_raw:
+                output_name = (
+                    self._shapes_layer_selection.currentText()
+                )
+                output_layer = self._get_layer_by_name_safe(
+                    output_name
+                )
+                if isinstance(
+                    output_layer,
+                    napari.layers.shapes.shapes.Shapes,
+                ):
+                    self._ensure_features_columns(output_layer)
+                    selected = sorted(output_layer.selected_data)
+                    classes = {
+                        str(
+                            output_layer.features.at[idx, "class"]
+                        )
+                        for idx in selected
+                    }
+                    if len(classes) > 1:
+                        print(
+                            "Detect All: 選択 shape のクラスが"
+                            "混在しています。同じクラスの shape "
+                            "のみ選択してください"
+                        )
+                        return
+                    class_str = classes.pop()
+                else:
+                    class_str = self._get_selected_class()
+            else:
+                class_str = self._get_selected_class()
+
+            text = (
+                str(class_str).split(": ", 1)[-1]
+                .split("-")[-1]
+                .strip()
+                if class_str
+                else ""
+            )
+
+            # Prepare image
+            layer_name = self._image_layer_selection.currentText()
+            image_layer = self._get_layer_by_name_safe(layer_name)
+            if image_layer is None:
+                print("Error: No image layer selected")
+                return
+
+            if image_layer.data.ndim > 3:
+                current_slice = (
+                    self._viewer.dims.current_step[0]
+                )
+                image_data = image_layer.data[current_slice]
+            else:
+                image_data = image_layer.data
+
+            # Normalize to uint8
+            if image_data.dtype != np.uint8:
+                lo = float(image_data.min())
+                hi = float(image_data.max())
+                if hi - lo > 0:
+                    image_data = (
+                        (image_data - lo) / (hi - lo) * 255
+                    ).astype(np.uint8)
+                else:
+                    image_data = np.zeros_like(
+                        image_data, dtype=np.uint8
+                    )
+
+            # Encode as JPEG
+            if image_data.ndim == 2:
+                pil_image = Image.fromarray(
+                    image_data
+                ).convert("RGB")
+            else:
+                pil_image = Image.fromarray(image_data)
+
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="JPEG", quality=100)
+            image_b64 = base64.b64encode(
+                buffer.getvalue()
+            ).decode("utf-8")
+
+            # Build request
+            request_data = {
+                "input": {
+                    "request_type": "detect_all",
+                    "image_data": image_b64,
+                    "image_format": "jpeg",
+                    "exemplar_boxes": [
+                        b.tolist()
+                        if hasattr(b, "tolist")
+                        else list(b)
+                        for b in all_boxes
+                    ],
+                    "class_name": text,
+                    "prompt_mode": prompt_mode,
+                }
+            }
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[500, 502, 503, 504, 520],
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("https://", adapter)
+
+            print("Sending Detect All request to API...")
+            response = session.post(
+                api_url,
+                headers=headers,
+                json=request_data,
+                timeout=300,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            if "error" in result:
+                print(f"API error: {result['error']}")
+                return
+
+            output = result.get("output", result)
+            masks_geojson = output.get("masks_geojson", [])
+            num_masks = output.get("num_masks", len(masks_geojson))
+
+            if num_masks == 0:
+                print("SAM3 Detect All: no objects detected")
+                return
+
+            # Convert each GeoJSON to mask
+            masks = []
+            for gj in masks_geojson:
+                m = self._geojson_to_mask(gj, image_data.shape)
+                masks.append(m)
+
+            n = self._accept_multi_masks(masks, class_str)
+            print(
+                f"SAM3 Detect All (API): {n} objects "
+                f"accepted as '{class_str}'"
+            )
+
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as e:
+            print(f"Detect All API error: {str(e)}")
+        finally:
+            self._sam_box_layer.data = []
+            self._input_box = None
+            self._labels_layer.data = np.zeros_like(
+                self._labels_layer.data
+            )
 
     def _predict_api(self):
         """Execute prediction using API"""
