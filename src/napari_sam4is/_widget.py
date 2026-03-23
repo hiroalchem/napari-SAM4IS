@@ -2372,11 +2372,26 @@ class SAMWidget(QWidget):
             else:
                 image_data = image_layer.data
 
+            # Normalize to uint8 (min-max 0-255)
+            if image_data.dtype != np.uint8:
+                lo = float(image_data.min())
+                hi = float(image_data.max())
+                if hi - lo > 0:
+                    image_data = (
+                        (image_data - lo) / (hi - lo) * 255
+                    ).astype(np.uint8)
+                else:
+                    image_data = np.zeros_like(
+                        image_data, dtype=np.uint8
+                    )
+
             # Convert to PIL Image and encode as JPEG
             if image_data.ndim == 2:  # Grayscale
-                pil_image = Image.fromarray(image_data).convert("RGB")
+                pil_image = Image.fromarray(
+                    image_data
+                ).convert("RGB")
             else:  # RGB
-                pil_image = Image.fromarray(image_data.astype(np.uint8))
+                pil_image = Image.fromarray(image_data)
 
             buffer = io.BytesIO()
             pil_image.save(buffer, format="JPEG", quality=100)
@@ -2440,6 +2455,8 @@ class SAMWidget(QWidget):
 
     def _geojson_to_mask(self, geojson_data, image_shape):
         """Convert GeoJSON data to mask"""
+        from skimage.draw import polygon
+
         height, width = image_shape[:2]
         mask = np.zeros((height, width), dtype=np.uint8)
 
@@ -2447,20 +2464,12 @@ class SAMWidget(QWidget):
             if feature["geometry"]["type"] == "Polygon":
                 coordinates = feature["geometry"]["coordinates"][0]
                 coords_array = np.array(coordinates)
-
-                from matplotlib.path import Path
-
-                path = Path(coords_array)
-
-                y_coords, x_coords = np.meshgrid(
-                    np.arange(height), np.arange(width), indexing="ij"
+                # GeoJSON is [x, y], polygon() expects (row, col) = (y, x)
+                rr, cc = polygon(
+                    coords_array[:, 1], coords_array[:, 0],
+                    shape=(height, width),
                 )
-                points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
-
-                inside = path.contains_points(points)
-                inside_2d = inside.reshape(height, width)
-
-                mask = np.where(inside_2d, 1, mask)
+                mask[rr, cc] = 1
 
         return mask
 
