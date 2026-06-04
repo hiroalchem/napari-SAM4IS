@@ -1509,3 +1509,24 @@ def test_accept_multi_masks_iou_zero(make_napari_viewer):
     n = widget._accept_multi_masks(m1, "1: cell")
     # No filtering, so should be accepted
     assert n == 1
+
+
+def test_set_input_box_normalizes_drawing_direction(make_napari_viewer):
+    """Box prompt is direction-independent (issue #19)."""
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    # Rectangle x in [10.5, 50.5], y in [20.5, 60.5]; verts are (row=y, col=x).
+    corners = [
+        [20.5, 10.5],  # top-left
+        [20.5, 50.5],  # top-right
+        [60.5, 50.5],  # bottom-right
+        [60.5, 10.5],  # bottom-left
+    ]
+    # Each start corner is a different drag direction, same rectangle.
+    for start in range(4):
+        verts = np.array(corners[start:] + corners[:start])
+        widget._sam_box_layer.data = [verts]
+        widget._set_input_box_from_sam_box_layer()
+        assert list(widget._input_box) == [10.5, 20.5, 50.5, 60.5]
