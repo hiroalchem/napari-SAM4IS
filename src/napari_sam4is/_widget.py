@@ -1987,9 +1987,7 @@ class SAMWidget(QWidget):
         """Store SAM-Box rectangle as normalized [x1, y1, x2, y2]."""
         coords = np.asarray(self._sam_box_layer.data[0])
         ys, xs = coords[:, 0], coords[:, 1]
-        self._input_box = np.array(
-            [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
-        )
+        self._input_box = np.array([xs.min(), ys.min(), xs.max(), ys.max()])
 
     def _reject_all_boxes(self, layer):
         self._sam_box_layer.data = []
