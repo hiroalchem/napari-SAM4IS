@@ -589,10 +589,17 @@ class SAMWidget(QWidget):
             not is_checked and self._model_selection.currentText() == "sam3"
         )
         # SAM3 prompt group: show in API mode for detect_all support
+        self._update_sam3_prompt_group_state()
+
+    def _update_sam3_prompt_group_state(self):
+        """Show/enable the SAM3 prompt group consistently across modes."""
         is_sam3 = self._model_selection.currentText() == "sam3"
-        self._sam3_prompt_group.setVisible(
-            is_sam3 and (is_checked or self._sam3_processor is not None)
-        )
+        is_api = self._use_api_checkbox.isChecked()
+        is_manual = self._manual_mode_checkbox.isChecked()
+        available = is_sam3 and (is_api or self._sam3_processor is not None)
+        self._sam3_prompt_group.setVisible(available)
+        # Manual mode always disables the group; enabled is owned here.
+        self._sam3_prompt_group.setEnabled(available and not is_manual)
 
     def _get_image_shape(self):
         """Return 2D shape of the currently selected image layer."""
@@ -622,7 +629,7 @@ class SAMWidget(QWidget):
             self._api_group.setEnabled(False)
             self._model_selection.setEnabled(False)
             self._model_load_btn.setEnabled(False)
-            self._sam3_prompt_group.setEnabled(False)
+            self._update_sam3_prompt_group_state()
 
             # Hide SAM layers
             self._sam_box_layer.visible = False
@@ -641,10 +648,7 @@ class SAMWidget(QWidget):
             is_api = self._use_api_checkbox.isChecked()
             self._model_selection.setEnabled(not is_api)
             self._model_load_btn.setEnabled(not is_api)
-            # Only enable SAM3 group if not in API mode and SAM3 is loaded
-            self._sam3_prompt_group.setEnabled(
-                not is_api and self._sam3_processor is not None
-            )
+            self._update_sam3_prompt_group_state()
 
             # Show SAM layers
             self._sam_box_layer.visible = True
@@ -1764,9 +1768,7 @@ class SAMWidget(QWidget):
         # Reset SAM1 state
         self._sam_model = None
         self.sam_predictor = None
-        is_manual = self._manual_mode_checkbox.isChecked()
-        self._sam3_prompt_group.setVisible(True)
-        self._sam3_prompt_group.setEnabled(not is_manual)
+        self._update_sam3_prompt_group_state()
         print("SAM3 loaded")
         if self._image_layer_selection.currentText():
             self._on_image_layer_changed(True)
@@ -1797,7 +1799,7 @@ class SAMWidget(QWidget):
         self._sam3_model = None
         self._sam3_processor = None
         self._sam3_inference_state = None
-        self._sam3_prompt_group.setVisible(False)
+        self._update_sam3_prompt_group_state()
         print("model loaded")
         if self._image_layer_selection.currentText() != "":
             self._on_image_layer_changed(True)
@@ -2350,6 +2352,33 @@ class SAMWidget(QWidget):
             "Shape を SAM-Predict に送りました。A で再 Accept してください。"
         )
 
+    def _encode_current_image_for_api(self):
+        """Return (base64 JPEG, (H, W)) for the selected image as RGB uint8.
+
+        Returns None if no image layer is selected.
+        """
+        image_layer = self._get_layer_by_name_safe(
+            self._image_layer_selection.currentText()
+        )
+        if image_layer is None:
+            return None
+        current_step = (
+            self._viewer.dims.current_step[0]
+            if "stack" in self._image_type
+            else None
+        )
+        image = preprocess(image_layer.data, self._image_type, current_step)
+        if image.dtype != np.uint8:
+            lo, hi = float(image.min()), float(image.max())
+            if hi - lo > 0:
+                image = ((image - lo) / (hi - lo) * 255).astype(np.uint8)
+            else:
+                image = np.zeros_like(image, dtype=np.uint8)
+        buffer = io.BytesIO()
+        Image.fromarray(image).save(buffer, format="JPEG", quality=100)
+        b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        return b64, image.shape[:2]
+
     def _detect_all_api(self):
         """Execute Detect All using API."""
         try:
@@ -2425,38 +2454,11 @@ class SAMWidget(QWidget):
             )
 
             # Prepare image
-            layer_name = self._image_layer_selection.currentText()
-            image_layer = self._get_layer_by_name_safe(layer_name)
-            if image_layer is None:
+            encoded = self._encode_current_image_for_api()
+            if encoded is None:
                 print("Error: No image layer selected")
                 return
-
-            if image_layer.data.ndim > 3:
-                current_slice = self._viewer.dims.current_step[0]
-                image_data = image_layer.data[current_slice]
-            else:
-                image_data = image_layer.data
-
-            # Normalize to uint8
-            if image_data.dtype != np.uint8:
-                lo = float(image_data.min())
-                hi = float(image_data.max())
-                if hi - lo > 0:
-                    image_data = ((image_data - lo) / (hi - lo) * 255).astype(
-                        np.uint8
-                    )
-                else:
-                    image_data = np.zeros_like(image_data, dtype=np.uint8)
-
-            # Encode as JPEG
-            if image_data.ndim == 2:
-                pil_image = Image.fromarray(image_data).convert("RGB")
-            else:
-                pil_image = Image.fromarray(image_data)
-
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="JPEG", quality=100)
-            image_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            image_b64, image_shape = encoded
 
             # Build request
             request_data = {
@@ -2512,10 +2514,15 @@ class SAMWidget(QWidget):
             # Convert each GeoJSON to mask
             masks = []
             for gj in masks_geojson:
-                m = self._geojson_to_mask(gj, image_data.shape)
+                m = self._geojson_to_mask(gj, image_shape)
                 masks.append(m)
 
             n = self._accept_multi_masks(masks, class_str)
+            # Clear state only after a successful accept (mirrors
+            # _on_sam3_detect_all); early returns keep the user's box.
+            self._sam_box_layer.data = []
+            self._input_box = None
+            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
             print(
                 f"SAM3 Detect All (API): {n} objects "
                 f"accepted as '{class_str}'"
@@ -2528,10 +2535,6 @@ class SAMWidget(QWidget):
             TypeError,
         ) as e:
             print(f"Detect All API error: {str(e)}")
-        finally:
-            self._sam_box_layer.data = []
-            self._input_box = None
-            self._labels_layer.data = np.zeros_like(self._labels_layer.data)
 
     def _predict_api(self):
         """Execute prediction using API"""
@@ -2548,38 +2551,11 @@ class SAMWidget(QWidget):
 
         try:
             # Get current image
-            image_layer = self._get_layer_by_name_safe(
-                self._image_layer_selection.currentText()
-            )
-            if image_layer is None:
+            encoded = self._encode_current_image_for_api()
+            if encoded is None:
                 print("Error: Image layer not found or was renamed")
                 return
-            if "stack" in self._image_type:
-                current_slice = self._viewer.dims.current_step[0]
-                image_data = image_layer.data[current_slice]
-            else:
-                image_data = image_layer.data
-
-            # Normalize to uint8 (min-max 0-255)
-            if image_data.dtype != np.uint8:
-                lo = float(image_data.min())
-                hi = float(image_data.max())
-                if hi - lo > 0:
-                    image_data = ((image_data - lo) / (hi - lo) * 255).astype(
-                        np.uint8
-                    )
-                else:
-                    image_data = np.zeros_like(image_data, dtype=np.uint8)
-
-            # Convert to PIL Image and encode as JPEG
-            if image_data.ndim == 2:  # Grayscale
-                pil_image = Image.fromarray(image_data).convert("RGB")
-            else:  # RGB
-                pil_image = Image.fromarray(image_data)
-
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="JPEG", quality=100)
-            image_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            image_b64, image_shape = encoded
 
             # Wrap bounding box coordinates in list
             coords = [self._input_box.tolist()]
@@ -2622,7 +2598,7 @@ class SAMWidget(QWidget):
 
             # Generate mask from GeoJSON
             geojson_data = result["output"]["geojson"]
-            mask = self._geojson_to_mask(geojson_data, image_data.shape)
+            mask = self._geojson_to_mask(geojson_data, image_shape)
 
             self._labels_layer.data = mask.astype(np.uint8)
             print("API prediction completed")

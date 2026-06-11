@@ -1509,3 +1509,107 @@ def test_accept_multi_masks_iou_zero(make_napari_viewer):
     n = widget._accept_multi_masks(m1, "1: cell")
     # No filtering, so should be accepted
     assert n == 1
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests' Response in API tests."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_detect_all_api_text_mode(make_napari_viewer):
+    """Detect All (API) in text mode posts the right payload and accepts."""
+    from unittest.mock import patch
+
+    import requests
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+    widget._class_name_input.setText("cat")
+    widget._add_class()
+
+    widget._use_api_checkbox.setChecked(True)
+    widget._api_url_input.setText("https://mock-api.test")
+    widget._api_key_input.setText("test-key")
+    widget._radio_btn_shape.setChecked(True)
+    widget._sam3_prompt_text_radio.setChecked(True)
+
+    # Each masks_geojson element is a FeatureCollection (see _geojson_to_mask).
+    feature_collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[10, 10], [10, 30], [30, 30], [30, 10], [10, 10]]
+                    ],
+                },
+            }
+        ],
+    }
+    payload = {
+        "output": {"masks_geojson": [feature_collection], "num_masks": 1}
+    }
+
+    with patch.object(
+        requests.Session, "post", return_value=_FakeResponse(payload)
+    ) as mock_post:
+        widget._detect_all_api()
+
+    assert len(widget._accepted_layer.data) == 1
+    mock_post.assert_called_once()
+    sent = mock_post.call_args.kwargs["json"]["input"]
+    assert sent["request_type"] == "detect_all"
+    assert sent["prompt_mode"] == "text"
+    assert sent["class_name"] == "cat"
+
+
+def test_detect_all_api_early_return_keeps_box(make_napari_viewer):
+    """A blank API key returns early without clearing the drawn box."""
+    from unittest.mock import patch
+
+    import requests
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.random((100, 100)))
+    widget = SAMWidget(viewer)
+
+    widget._use_api_checkbox.setChecked(True)
+    widget._api_url_input.setText("https://mock-api.test")
+    widget._api_key_input.setText("")  # missing key -> early return
+    widget._sam3_prompt_text_radio.setChecked(True)
+
+    widget._input_box = np.array([1, 2, 3, 4])
+    widget._sam_box_layer.data = [np.array([[1, 1], [1, 5], [5, 5], [5, 1]])]
+
+    with patch.object(requests.Session, "post") as mock_post:
+        widget._detect_all_api()
+
+    mock_post.assert_not_called()
+    assert widget._input_box is not None
+    assert len(widget._sam_box_layer.data) == 1
+
+
+def test_encode_current_image_for_api_rgba(make_napari_viewer):
+    """RGBA images are encoded without raising (regression for JPEG save)."""
+    viewer = make_napari_viewer()
+    rgba = np.random.randint(0, 255, (50, 50, 4), dtype=np.uint8)
+    viewer.add_image(rgba)
+    widget = SAMWidget(viewer)
+    widget._image_type = "RGBA"
+
+    encoded = widget._encode_current_image_for_api()
+    assert encoded is not None
+    image_b64, image_shape = encoded
+    assert isinstance(image_b64, str) and image_b64
+    assert image_shape == (50, 50)
