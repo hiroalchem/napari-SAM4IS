@@ -1982,16 +1982,16 @@ class SAMWidget(QWidget):
                     self._on_image_layer_changed(None)
             else:
                 pass
-            coords = self._sam_box_layer.data[0]
-            y1 = int(coords[0][0])
-            x1 = int(coords[0][1])
-            y2 = int(coords[2][0])
-            x2 = int(coords[2][1])
-            print(f"x1 = {x1}, y1 = {y1}, x2 = {x2}, y2 = {y2}")
-            self._input_box = np.array([x1, y1, x2, y2])
+            self._set_input_box_from_sam_box_layer()
             self._create_input_point()
             self._predict()
             self._sam_box_layer.data = []
+
+    def _set_input_box_from_sam_box_layer(self):
+        """Store SAM-Box rectangle as normalized [x1, y1, x2, y2]."""
+        coords = np.asarray(self._sam_box_layer.data[0])
+        ys, xs = coords[:, 0], coords[:, 1]
+        self._input_box = np.array([xs.min(), ys.min(), xs.max(), ys.max()])
 
     def _reject_all_boxes(self, layer):
         self._sam_box_layer.data = []
