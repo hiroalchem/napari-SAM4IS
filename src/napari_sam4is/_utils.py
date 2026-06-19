@@ -99,6 +99,17 @@ def preprocess(image, layer_type, current_step=None):
     return np.array(image)
 
 
+def to_uint8(image):
+    """Min-max normalize to uint8 (pass through if already uint8)."""
+    image = np.asarray(image)
+    if image.dtype == np.uint8:
+        return image
+    lo, hi = float(image.min()), float(image.max())
+    if hi - lo > 0:
+        return ((image - lo) / (hi - lo) * 255).astype(np.uint8)
+    return np.zeros_like(image, dtype=np.uint8)
+
+
 def check_image_type(viewer, layer_name):
     image = viewer.layers[layer_name].data
     print(f"current image shape = {image.shape}")

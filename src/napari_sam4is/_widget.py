@@ -52,6 +52,7 @@ from ._utils import (
     load_json,
     load_model,
     preprocess,
+    to_uint8,
 )
 
 _ATTR_COLUMNS = {
@@ -1930,19 +1931,8 @@ class SAMWidget(QWidget):
             if self._sam3_processor is not None:
                 from PIL import Image as _PILImage
 
-                if preprocessed.dtype != np.uint8:
-                    lo = float(preprocessed.min())
-                    hi = float(preprocessed.max())
-                    if hi - lo > 0:
-                        preprocessed = (
-                            (preprocessed - lo) / (hi - lo) * 255
-                        ).astype(np.uint8)
-                    else:
-                        preprocessed = np.zeros_like(
-                            preprocessed, dtype=np.uint8
-                        )
                 self._sam3_inference_state = self._sam3_processor.set_image(
-                    _PILImage.fromarray(preprocessed)
+                    _PILImage.fromarray(to_uint8(preprocessed))
                 )
                 print("SAM3: image set")
             elif self.sam_predictor is not None:
@@ -2367,13 +2357,9 @@ class SAMWidget(QWidget):
             if "stack" in self._image_type
             else None
         )
-        image = preprocess(image_layer.data, self._image_type, current_step)
-        if image.dtype != np.uint8:
-            lo, hi = float(image.min()), float(image.max())
-            if hi - lo > 0:
-                image = ((image - lo) / (hi - lo) * 255).astype(np.uint8)
-            else:
-                image = np.zeros_like(image, dtype=np.uint8)
+        image = to_uint8(
+            preprocess(image_layer.data, self._image_type, current_step)
+        )
         buffer = io.BytesIO()
         Image.fromarray(image).save(buffer, format="JPEG", quality=100)
         b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
