@@ -52,6 +52,7 @@ from ._utils import (
     label2polygon,
     load_json,
     load_model,
+    mask_to_rings,
     merge_rings_to_polygon,
     polygon_to_rings,
     preprocess,
@@ -2434,13 +2435,44 @@ class SAMWidget(QWidget):
             print("1つの shape を選択してください")
             return
 
-        rings = polygon_to_rings(output_layer.data[selected[0]])
+        polygon = output_layer.data[selected[0]]
+        rings = polygon_to_rings(polygon)
         if len(rings) < 2:
-            print("この shape に穴はありません")
-            return
+            rings = self._rings_from_raster(polygon)
+            if rings is None:
+                print("この shape に穴はありません")
+                return
+            print(
+                "頂点編集で崩れたリング構造を描画結果から復元しました"
+                "（座標はピクセル単位に丸められます）"
+            )
 
         self._replace_shapes(output_layer, selected, rings, selected[0])
         print(f"{len(rings)} 個のリングに分解しました")
+
+    def _rings_from_raster(self, polygon):
+        """Recover rings from a shape's rendered geometry.
+
+        Each ring is closed by repeating its first vertex, so those
+        vertices appear twice in the array and napari makes both copies
+        clickable. Moving or deleting only one copy leaves a shape that
+        still renders with its hole but can no longer be split from the
+        vertex list alone; rasterizing recovers the rings.
+
+        Returns None if the rendered shape has no hole after all.
+        """
+        from skimage.draw import polygon2mask as _polygon2mask
+
+        height, width = self._labels_layer.data.shape
+        groups = mask_to_rings(_polygon2mask((height, width), polygon))
+        if not any(holes for _, holes in groups):
+            return None
+
+        rings = []
+        for outer, holes in groups:
+            rings.append(np.round(outer))
+            rings.extend(np.round(hole) for hole in holes)
+        return rings
 
     def _encode_current_image_for_api(self):
         """Return (base64 JPEG, (H, W)) for the selected image as RGB uint8.

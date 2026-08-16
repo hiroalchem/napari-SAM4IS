@@ -321,3 +321,54 @@ class TestMergeAndSplit:
         layer.selected_data = {0}
         widget._split_selected_rings()
         assert len(layer.data) == 1
+
+
+class TestClosureVertexRecovery:
+    """Each ring's first vertex appears twice, and napari makes both
+    copies clickable. Moving only one desynchronizes the pair."""
+
+    def octagon_donut(self):
+        angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+        outer = np.stack(
+            [50 + 40 * np.sin(angles), 50 + 40 * np.cos(angles)], 1
+        )
+        inner = np.array([[45, 45], [55, 45], [55, 55], [45, 55]], float)
+        return np.concatenate([outer, outer[:1], inner, inner[:1]])
+
+    def test_ordinary_vertex_edits_keep_the_rings(self):
+        donut = self.octagon_donut()
+        moved = donut.copy()
+        moved[1] += [5, 5]
+        assert len(polygon_to_rings(moved)) == 2
+        assert len(polygon_to_rings(np.delete(donut, 1, axis=0))) == 2
+        assert (
+            len(polygon_to_rings(np.insert(donut, 1, [[10, 50]], axis=0))) == 2
+        )
+
+    def test_desynced_closure_vertex_defeats_the_split(self):
+        donut = self.octagon_donut()
+        broken = donut.copy()
+        broken[0] = [12, 50]  # its twin at index 8 stays put
+        assert len(polygon_to_rings(broken)) == 1
+        # the hole still renders, which is what makes this easy to miss
+        assert triangles_in_hole(broken, (50, 50), 5) == 0
+
+    def test_split_recovers_from_a_desynced_closure_vertex(
+        self, make_napari_viewer
+    ):
+        from napari_sam4is import SAMWidget
+
+        viewer = make_napari_viewer()
+        viewer.add_image(np.zeros((100, 100), np.uint8))
+        widget = SAMWidget(viewer)
+        layer = widget._accepted_layer
+        widget._ensure_features_columns(layer)
+
+        broken = self.octagon_donut()
+        broken[0] = [12, 50]
+        layer.add_polygons([broken], edge_width=2)
+        widget._shapes_layer_selection.setCurrentText(layer.name)
+        layer.selected_data = {0}
+        widget._split_selected_rings()
+
+        assert len(layer.data) > 1

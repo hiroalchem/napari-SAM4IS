@@ -179,9 +179,13 @@ To draw one by hand, napari's polygon tool cannot create a hole directly, so dra
 3. Select both shapes (shift-click) and press **H**, or click **Merge as Hole (H)**. They become a single annotation whose interior ring is a hole.
 4. To edit it later, select it and press **U** (**Split Rings**) to get the individual rings back, edit them, then merge again.
 
-Any shape fully contained in another becomes a hole; a shape nested inside a hole becomes a solid island again. Holes are written to COCO as a single polygon in napari's concatenated-ring form, which `pycocotools` rasterizes correctly, and the reported `area` excludes them.
+Any shape fully contained in another becomes a hole; a shape nested inside a hole becomes a solid island again. Holes are written to COCO as a single polygon in napari's concatenated-ring form, and the reported `area` excludes them.
 
 > **Note**: hole rendering requires napari 0.6.0 or newer.
+
+**Editing a merged shape**: each ring is closed by repeating its first vertex, so those vertices appear twice and napari makes both copies clickable. Moving or deleting just one copy leaves a shape that still *looks* right but can no longer be split cleanly. Prefer **U** → edit → **H**, or **E** to redraw in SAM-Predict. If it does happen, **U** falls back to recovering the rings from the rendered shape, with coordinates rounded to pixels.
+
+**Downstream compatibility**: `pycocotools` and OpenCV (`cv2.fillPoly`) both rasterize this form correctly — verified against a reference donut mask. **Shapely does not**: `shapely.geometry.Polygon()` reports the ring as self-intersecting, and the usual `buffer(0)` repair silently fills the hole in. If your pipeline loads COCO polygons through Shapely, convert the rings explicitly with `Polygon(shell, holes)` instead.
 
 ### Annotation Attributes
 Each annotation can have additional attributes to support quality control workflows.
