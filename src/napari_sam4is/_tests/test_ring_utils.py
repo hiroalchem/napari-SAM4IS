@@ -187,3 +187,65 @@ class TestCocoRoundTrip:
             create_json(gray, "t", [polygon])["annotations"][0]["area"]
             == create_json(rgb, "t", [polygon])["annotations"][0]["area"]
         )
+
+
+def geojson_polygon(rings):
+    return {
+        "features": [{"geometry": {"type": "Polygon", "coordinates": rings}}]
+    }
+
+
+class TestGeojsonToMask:
+    """The API backend can return polygons with interior rings."""
+
+    OUTER = [[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]]
+    HOLE = [[40, 40], [60, 40], [60, 60], [40, 60], [40, 40]]
+
+    def widget(self, make_napari_viewer):
+        from napari_sam4is import SAMWidget
+
+        viewer = make_napari_viewer()
+        viewer.add_image(np.zeros((100, 100), np.uint8))
+        return SAMWidget(viewer)
+
+    def test_interior_ring_becomes_a_hole(self, make_napari_viewer):
+        widget = self.widget(make_napari_viewer)
+        mask = widget._geojson_to_mask(
+            geojson_polygon([self.OUTER, self.HOLE]), (100, 100)
+        )
+        assert mask[50, 50] == 0  # inside the hole
+        assert mask[20, 20] == 1  # inside the ring
+
+    def test_multipolygon_is_supported(self, make_napari_viewer):
+        widget = self.widget(make_napari_viewer)
+        data = {
+            "features": [
+                {
+                    "geometry": {
+                        "type": "MultiPolygon",
+                        "coordinates": [[self.OUTER, self.HOLE]],
+                    }
+                }
+            ]
+        }
+        mask = widget._geojson_to_mask(data, (100, 100))
+        assert mask[50, 50] == 0
+        assert mask[20, 20] == 1
+
+    def test_hole_does_not_erase_an_overlapping_feature(
+        self, make_napari_viewer
+    ):
+        widget = self.widget(make_napari_viewer)
+        data = geojson_polygon([self.OUTER, self.HOLE])
+        data["features"].append(
+            {
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[45, 45], [55, 45], [55, 55], [45, 55], [45, 45]]
+                    ],
+                }
+            }
+        )
+        mask = widget._geojson_to_mask(data, (100, 100))
+        assert mask[50, 50] == 1

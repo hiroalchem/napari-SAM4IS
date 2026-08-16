@@ -2604,17 +2604,31 @@ class SAMWidget(QWidget):
         height, width = image_shape[:2]
         mask = np.zeros((height, width), dtype=np.uint8)
 
-        for feature in geojson_data["features"]:
-            if feature["geometry"]["type"] == "Polygon":
-                coordinates = feature["geometry"]["coordinates"][0]
-                coords_array = np.array(coordinates)
+        def rings_to_mask(rings):
+            """First ring is the exterior, the rest are holes."""
+            sub = np.zeros((height, width), dtype=np.uint8)
+            for i, ring in enumerate(rings):
+                coords = np.array(ring)
+                if len(coords) < 3:
+                    continue
                 # GeoJSON is [x, y], polygon() expects (row, col) = (y, x)
                 rr, cc = polygon(
-                    coords_array[:, 1],
-                    coords_array[:, 0],
+                    coords[:, 1],
+                    coords[:, 0],
                     shape=(height, width),
                 )
-                mask[rr, cc] = 1
+                sub[rr, cc] = 0 if i else 1
+            return sub
+
+        for feature in geojson_data["features"]:
+            geometry = feature["geometry"]
+            # each feature is filled separately so that one feature's
+            # hole cannot erase an overlapping feature
+            if geometry["type"] == "Polygon":
+                mask |= rings_to_mask(geometry["coordinates"])
+            elif geometry["type"] == "MultiPolygon":
+                for part in geometry["coordinates"]:
+                    mask |= rings_to_mask(part)
 
         return mask
 
