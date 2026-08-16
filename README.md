@@ -167,6 +167,22 @@ You can also annotate without using SAM by enabling **Manual Mode**.
 4. Press **A** to accept or **R** to reject, just like SAM mode.
 5. After accepting, the painted mask is converted to a polygon (instance mode) or merged into the output Labels layer (semantic mode), with the selected class assigned.
 
+### Shapes with Holes (Donut Shapes)
+Annotations with holes — a ring, a cell with its nucleus excluded, an object seen through an opening — are supported in instance mode.
+
+When SAM returns a mask that contains holes, they are preserved automatically on accept; no extra step is needed.
+
+To draw one by hand, napari's polygon tool cannot create a hole directly, so draw the rings separately and merge them:
+
+1. Draw the outer boundary as a normal polygon.
+2. Draw the inner boundary as a second polygon, fully inside the first.
+3. Select both shapes (shift-click) and press **H**, or click **Merge as Hole (H)**. They become a single annotation whose interior ring is a hole.
+4. To edit it later, select it and press **U** (**Split Rings**) to get the individual rings back, edit them, then merge again.
+
+Any shape fully contained in another becomes a hole; a shape nested inside a hole becomes a solid island again. Holes are written to COCO as a single polygon in napari's concatenated-ring form, which `pycocotools` rasterizes correctly, and the reported `area` excludes them.
+
+> **Note**: hole rendering requires napari 0.6.0 or newer.
+
 ### Annotation Attributes
 Each annotation can have additional attributes to support quality control workflows.
 

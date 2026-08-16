@@ -238,24 +238,21 @@ def polygon_to_rings(polygon):
     return rings or [poly]
 
 
-def mask_to_rings(mask):
-    """Extract outer/hole ring groups from a binary mask.
+def group_rings_by_nesting(rings):
+    """Group rings into outer/hole pairs by containment.
 
-    Contours touching the image border come back open from
-    ``find_contours``, so every ring is closed explicitly here. Nesting
-    is resolved by containment rather than contour order: rings at even
-    depth are outer boundaries, rings at odd depth are their holes.
+    Nesting is resolved by containment rather than by input order: rings
+    at even depth are outer boundaries, rings at odd depth are the holes
+    of whichever ring encloses them. A ring nested inside a hole is an
+    island and becomes an outer boundary again.
 
     Args:
-        mask (np.ndarray): 2D mask; non-zero pixels are foreground
+        rings (iterable): (N, 2) vertex arrays, open or explicitly closed
 
     :return: list of ``(outer_ring, [hole_rings])`` tuples
     """
-    rings = []
-    for contour in find_contours(np.asarray(mask) > 0, 0.5):
-        ring = _dedupe_consecutive(_open_ring(contour))
-        if len(ring) >= 3:
-            rings.append(ring)
+    rings = [_dedupe_consecutive(_open_ring(r)) for r in rings]
+    rings = [r for r in rings if len(r) >= 3]
     if not rings:
         return []
 
@@ -277,6 +274,40 @@ def mask_to_rings(mask):
         ]
         groups.append((ring, holes))
     return groups
+
+
+def mask_to_rings(mask):
+    """Extract outer/hole ring groups from a binary mask.
+
+    Contours touching the image border come back open from
+    ``find_contours``, so every ring is closed explicitly here.
+
+    Args:
+        mask (np.ndarray): 2D mask; non-zero pixels are foreground
+
+    :return: list of ``(outer_ring, [hole_rings])`` tuples
+    """
+    return group_rings_by_nesting(find_contours(np.asarray(mask) > 0, 0.5))
+
+
+def merge_rings_to_polygon(rings):
+    """Combine independent rings into one concatenated-ring polygon.
+
+    Used to turn separately drawn shapes into a single annotation with
+    holes, which is awkward to draw directly in the napari GUI.
+
+    Args:
+        rings (iterable): (N, 2) vertex arrays
+
+    :return: (M, 2) vertex array, or None if no usable ring was given
+    """
+    parts = []
+    for outer, holes in group_rings_by_nesting(rings):
+        try:
+            parts.append(rings_to_polygon(outer, holes))
+        except ValueError:
+            continue
+    return np.concatenate(parts) if parts else None
 
 
 def label2polygon(label):

@@ -249,3 +249,75 @@ class TestGeojsonToMask:
         )
         mask = widget._geojson_to_mask(data, (100, 100))
         assert mask[50, 50] == 1
+
+
+class TestMergeAndSplit:
+    """Rings drawn as separate shapes are merged into one annotation."""
+
+    OUTER = np.array([[10, 10], [90, 10], [90, 90], [10, 90]], float)
+    INNER = np.array([[40, 40], [60, 40], [60, 60], [40, 60]], float)
+    APART = np.array([[95, 95], [99, 95], [99, 99], [95, 99]], float)
+
+    def setup_widget(self, make_napari_viewer, shapes):
+        from napari_sam4is import SAMWidget
+
+        viewer = make_napari_viewer()
+        viewer.add_image(np.zeros((100, 100), np.uint8))
+        widget = SAMWidget(viewer)
+        layer = widget._accepted_layer
+        widget._ensure_features_columns(layer)
+        layer.add_polygons(list(shapes), edge_width=2)
+        widget._shapes_layer_selection.setCurrentText(layer.name)
+        layer.selected_data = set(range(len(shapes)))
+        return widget, layer
+
+    def test_merge_makes_one_shape_with_a_hole(self, make_napari_viewer):
+        widget, layer = self.setup_widget(
+            make_napari_viewer, [self.OUTER, self.INNER]
+        )
+        widget._merge_selected_to_holes()
+
+        assert len(layer.data) == 1
+        assert len(polygon_to_rings(layer.data[0])) == 2
+        assert triangles_in_hole(layer.data[0], (50, 50), 10) == 0
+
+    def test_merge_keeps_the_enclosing_shape_class(self, make_napari_viewer):
+        widget, layer = self.setup_widget(
+            make_napari_viewer, [self.OUTER, self.INNER]
+        )
+        layer.features.loc[0, "class"] = "outer-class"
+        layer.features.loc[1, "class"] = "inner-class"
+        widget._merge_selected_to_holes()
+
+        assert layer.features.iloc[0]["class"] == "outer-class"
+
+    def test_merge_refuses_shapes_that_are_not_nested(
+        self, make_napari_viewer
+    ):
+        widget, layer = self.setup_widget(
+            make_napari_viewer, [self.OUTER, self.APART]
+        )
+        widget._merge_selected_to_holes()
+        assert len(layer.data) == 2
+
+    def test_merge_needs_two_shapes(self, make_napari_viewer):
+        widget, layer = self.setup_widget(make_napari_viewer, [self.OUTER])
+        widget._merge_selected_to_holes()
+        assert len(layer.data) == 1
+
+    def test_split_restores_one_shape_per_ring(self, make_napari_viewer):
+        widget, layer = self.setup_widget(
+            make_napari_viewer, [self.OUTER, self.INNER]
+        )
+        widget._merge_selected_to_holes()
+        layer.selected_data = {0}
+        widget._split_selected_rings()
+
+        assert len(layer.data) == 2
+        assert all(len(polygon_to_rings(p)) == 1 for p in layer.data)
+
+    def test_split_leaves_a_plain_shape_alone(self, make_napari_viewer):
+        widget, layer = self.setup_widget(make_napari_viewer, [self.OUTER])
+        layer.selected_data = {0}
+        widget._split_selected_rings()
+        assert len(layer.data) == 1

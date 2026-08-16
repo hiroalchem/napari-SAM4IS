@@ -48,9 +48,12 @@ from ._utils import (
     find_first_missing,
     find_missing_class_number,
     get_available_model_names,
+    group_rings_by_nesting,
     label2polygon,
     load_json,
     load_model,
+    merge_rings_to_polygon,
+    polygon_to_rings,
     preprocess,
     to_uint8,
 )
@@ -371,6 +374,24 @@ class SAMWidget(QWidget):
         )
         self._send_to_predict_btn.setEnabled(False)
         self.vbox.addWidget(self._send_to_predict_btn)
+
+        # --- Hole (donut) shape buttons ---
+        _hole_row = QHBoxLayout()
+        self._merge_holes_btn = QPushButton("Merge as Hole (H)")
+        self._merge_holes_btn.setToolTip(
+            "選択した shape をまとめて穴あきの1つの shape にする\n"
+            "内側に完全に含まれる shape が穴になる"
+        )
+        self._merge_holes_btn.clicked.connect(self._merge_selected_to_holes)
+        _hole_row.addWidget(self._merge_holes_btn)
+
+        self._split_rings_btn = QPushButton("Split Rings (U)")
+        self._split_rings_btn.setToolTip(
+            "穴あき shape を編集できるようリングごとに分解する"
+        )
+        self._split_rings_btn.clicked.connect(self._split_selected_rings)
+        _hole_row.addWidget(self._split_rings_btn)
+        self.vbox.addLayout(_hole_row)
 
         # --- Annotation Attributes group ---
         self._attr_group = QGroupBox("Annotation Attributes")
@@ -946,6 +967,8 @@ class SAMWidget(QWidget):
         self._disconnect_output_layer_events()
         layer.events.highlight.connect(self._on_output_selection_changed)
         layer.bind_key("E", lambda _: self._send_selected_to_predict())
+        layer.bind_key("H", lambda _: self._merge_selected_to_holes())
+        layer.bind_key("U", lambda _: self._split_selected_rings())
         self._connected_output_layer = layer
 
     def _disconnect_output_layer_events(self):
@@ -957,8 +980,9 @@ class SAMWidget(QWidget):
                 self._connected_output_layer.events.highlight.disconnect(
                     self._on_output_selection_changed
                 )
-            with contextlib.suppress(TypeError, RuntimeError):
-                self._connected_output_layer.bind_key("E", None)
+            for key in ("E", "H", "U"):
+                with contextlib.suppress(TypeError, RuntimeError):
+                    self._connected_output_layer.bind_key(key, None)
             self._connected_output_layer = None
 
     # --- Display Settings Handlers ---
@@ -2339,6 +2363,84 @@ class SAMWidget(QWidget):
         print(
             "Shape を SAM-Predict に送りました。A で再 Accept してください。"
         )
+
+    def _get_output_shapes_layer(self):
+        """Return the selected output Shapes layer, or None."""
+        layer = self._get_layer_by_name_safe(
+            self._shapes_layer_selection.currentText()
+        )
+        if not isinstance(layer, napari.layers.shapes.shapes.Shapes):
+            return None
+        return layer
+
+    def _replace_shapes(self, output_layer, indices, polygons, keep):
+        """Swap shapes for new ones, inheriting ``keep``'s attributes."""
+        attributes = output_layer.features.reset_index(drop=True).iloc[keep]
+        for key in _ATTR_DEFAULTS:
+            if key in attributes:
+                output_layer.feature_defaults[key] = attributes[key]
+        output_layer.selected_data = set(indices)
+        output_layer.remove_selected()
+        output_layer.add_polygons(polygons, edge_width=2)
+        output_layer.refresh_text()
+
+    def _merge_selected_to_holes(self):
+        """Combine selected shapes into one annotation with holes.
+
+        Drawing a ring inside a ring is not something the napari GUI can
+        express directly, so the rings are drawn as separate shapes and
+        merged here into napari's concatenated-ring form.
+        """
+        output_layer = self._get_output_shapes_layer()
+        if output_layer is None:
+            return
+
+        selected = sorted(output_layer.selected_data)
+        if len(selected) < 2:
+            print("2つ以上の shape を選択してください")
+            return
+
+        rings = []
+        for idx in selected:
+            rings.extend(polygon_to_rings(output_layer.data[idx]))
+        if not any(holes for _, holes in group_rings_by_nesting(rings)):
+            print("入れ子になっている shape がありません")
+            return
+
+        merged = merge_rings_to_polygon(rings)
+        if merged is None:
+            print("マージできませんでした")
+            return
+
+        # the enclosing shape carries the attributes of the result
+        outer = max(
+            selected,
+            key=lambda i: np.prod(
+                output_layer.data[i].max(axis=0)
+                - output_layer.data[i].min(axis=0)
+            ),
+        )
+        self._replace_shapes(output_layer, selected, [merged], outer)
+        print("穴あきの1つの shape にマージしました")
+
+    def _split_selected_rings(self):
+        """Split a shape with holes back into one shape per ring."""
+        output_layer = self._get_output_shapes_layer()
+        if output_layer is None:
+            return
+
+        selected = sorted(output_layer.selected_data)
+        if len(selected) != 1:
+            print("1つの shape を選択してください")
+            return
+
+        rings = polygon_to_rings(output_layer.data[selected[0]])
+        if len(rings) < 2:
+            print("この shape に穴はありません")
+            return
+
+        self._replace_shapes(output_layer, selected, rings, selected[0])
+        print(f"{len(rings)} 個のリングに分解しました")
 
     def _encode_current_image_for_api(self):
         """Return (base64 JPEG, (H, W)) for the selected image as RGB uint8.
