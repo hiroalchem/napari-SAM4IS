@@ -2072,8 +2072,6 @@ class SAMWidget(QWidget):
                 "color": self._settings["text_color"],
             }
 
-        from skimage.measure import find_contours
-
         iou_threshold = self._iou_threshold_spin.value()
         same_class_only = self._iou_same_class_checkbox.isChecked()
 
@@ -2134,10 +2132,10 @@ class SAMWidget(QWidget):
                     skipped += 1
                     continue
 
-            contours = find_contours(m)
-            if not contours:
+            polygons = label2polygon(m)
+            if not polygons:
                 continue
-            polygon = contours[0].astype(int)
+            polygon = polygons[0]
             output_layer.feature_defaults["class"] = class_str
             for k, v in _ATTR_DEFAULTS.items():
                 if k != "class":

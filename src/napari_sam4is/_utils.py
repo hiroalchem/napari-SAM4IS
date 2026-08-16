@@ -6,7 +6,7 @@ import urllib
 import numpy as np
 from skimage.color import gray2rgb, rgba2rgb
 from skimage.draw import polygon2mask
-from skimage.measure import find_contours
+from skimage.measure import find_contours, points_in_poly
 
 logger = logging.getLogger(__name__)
 
@@ -145,16 +145,161 @@ def check_image_type(viewer, layer_name):
         return "Not supported"
 
 
+def _open_ring(ring):
+    """Drop an explicit closing vertex if the ring has one."""
+    ring = np.asarray(ring, dtype=float)
+    if len(ring) > 1 and np.array_equal(ring[0], ring[-1]):
+        return ring[:-1]
+    return ring
+
+
+def _dedupe_consecutive(ring):
+    """Drop consecutive duplicate vertices.
+
+    Repeated vertices are not robust for triangulation algorithms, and
+    rounding contour coordinates to integers readily produces them.
+    """
+    ring = np.asarray(ring, dtype=float)
+    if len(ring) < 2:
+        return ring
+    keep = np.ones(len(ring), dtype=bool)
+    keep[1:] = np.any(ring[1:] != ring[:-1], axis=1)
+    return ring[keep]
+
+
+def _signed_area(ring):
+    """Shoelace signed area of an open ring in (row, col) coordinates."""
+    ring = _open_ring(ring)
+    if len(ring) < 3:
+        return 0.0
+    x, y = ring[:, 0], ring[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def rings_to_polygon(outer, holes=()):
+    """Concatenate an outer ring and hole rings into one napari polygon.
+
+    napari (>= 0.6.0) represents a polygon with holes as a single vertex
+    array holding each ring explicitly closed, one after another. The
+    bridging edge between consecutive rings is traversed twice and is
+    discarded during triangulation, which is what opens up the hole.
+
+    Args:
+        outer (np.ndarray): (N, 2) outer ring, open or explicitly closed
+        holes (iterable): rings to subtract from ``outer``
+
+    :return: (M, 2) vertex array in napari's concatenated-ring form
+    """
+    outer = _dedupe_consecutive(_open_ring(outer))
+    if len(outer) < 3:
+        raise ValueError("outer ring needs at least 3 distinct vertices")
+
+    outer_sign = np.sign(_signed_area(outer)) or 1.0
+    parts = [np.vstack([outer, outer[:1]])]
+    for hole in holes:
+        ring = _dedupe_consecutive(_open_ring(hole))
+        if len(ring) < 3:
+            continue
+        # napari expects holes to wind opposite to the outer ring
+        if np.sign(_signed_area(ring)) == outer_sign:
+            ring = ring[::-1]
+        parts.append(np.vstack([ring, ring[:1]]))
+    return np.concatenate(parts)
+
+
+def polygon_to_rings(polygon):
+    """Split a concatenated-ring polygon back into its rings.
+
+    Inverse of :func:`rings_to_polygon`. The first ring is the outer
+    boundary and any further rings are holes. A polygon that is not in
+    the canonical concatenated form is returned unchanged as a single
+    ring, since splitting it would be ambiguous.
+
+    Args:
+        polygon (np.ndarray): (N, 2) vertex array
+
+    :return: list of (M, 2) open rings
+    """
+    poly = _dedupe_consecutive(polygon)
+    rings = []
+    i, n = 0, len(poly)
+    while i < n:
+        match = np.flatnonzero(np.all(poly[i + 1 :] == poly[i], axis=1))
+        if len(match) == 0:
+            # trailing vertices with no closure: not canonical
+            rings.append(poly[i:])
+            break
+        ring = poly[i : i + 1 + int(match[0])]
+        # a vertex revisited inside a ring makes the split ambiguous
+        if len(ring) < 3 or len(np.unique(ring, axis=0)) != len(ring):
+            return [poly]
+        rings.append(ring)
+        i += 2 + int(match[0])
+    return rings or [poly]
+
+
+def mask_to_rings(mask):
+    """Extract outer/hole ring groups from a binary mask.
+
+    Contours touching the image border come back open from
+    ``find_contours``, so every ring is closed explicitly here. Nesting
+    is resolved by containment rather than contour order: rings at even
+    depth are outer boundaries, rings at odd depth are their holes.
+
+    Args:
+        mask (np.ndarray): 2D mask; non-zero pixels are foreground
+
+    :return: list of ``(outer_ring, [hole_rings])`` tuples
+    """
+    rings = []
+    for contour in find_contours(np.asarray(mask) > 0, 0.5):
+        ring = _dedupe_consecutive(_open_ring(contour))
+        if len(ring) >= 3:
+            rings.append(ring)
+    if not rings:
+        return []
+
+    depth = np.zeros(len(rings), dtype=int)
+    for i, inner in enumerate(rings):
+        for j, outer in enumerate(rings):
+            if i != j and points_in_poly(inner[:1], outer)[0]:
+                depth[i] += 1
+
+    groups = []
+    for i, ring in enumerate(rings):
+        if depth[i] % 2:
+            continue
+        holes = [
+            rings[j]
+            for j in range(len(rings))
+            if depth[j] == depth[i] + 1
+            and points_in_poly(rings[j][:1], ring)[0]
+        ]
+        groups.append((ring, holes))
+    return groups
+
+
 def label2polygon(label):
     """Convert label to polygon
+
+    The mask becomes a single polygon in napari's concatenated-ring form,
+    so holes and disconnected components are preserved without changing
+    the one-mask-one-annotation model.
 
     Args:
         label (np.ndarray): label image
 
     :return: polygons
     """
-    polygons = [find_contours(label)[0].astype(int)]
-    return polygons
+    parts = []
+    for outer, holes in mask_to_rings(label):
+        try:
+            parts.append(
+                rings_to_polygon(np.round(outer), [np.round(h) for h in holes])
+            )
+        except ValueError:
+            continue
+    return [np.concatenate(parts)] if parts else []
 
 
 def create_json(
@@ -186,7 +331,10 @@ def create_json(
             "image_id": 0,
             "category_id": cat_id,
             "segmentation": [polygon.flatten().tolist()[::-1]],
-            "area": int(np.count_nonzero(polygon2mask(image.shape, polygon))),
+            # shape[:2]: an RGB image would otherwise count every channel
+            "area": int(
+                np.count_nonzero(polygon2mask(image.shape[:2], polygon))
+            ),
             "bbox": [
                 float(min(polygon[:, 1])),
                 float(min(polygon[:, 0])),
