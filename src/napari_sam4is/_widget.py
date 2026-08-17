@@ -2100,8 +2100,10 @@ class SAMWidget(QWidget):
         iou_threshold = self._iou_threshold_spin.value()
         same_class_only = self._iou_same_class_checkbox.isChecked()
 
-        # Pre-compute existing bboxes (inclusive int coords)
-        existing_bboxes = []
+        # Existing annotations to compare against. Their masks are
+        # rasterized lazily: a bounding box that misses the candidate
+        # rules the pair out without touching pixels.
+        existing = []
         if iou_threshold > 0:
             features = output_layer.features.reset_index(drop=True)
             for i, poly in enumerate(output_layer.data):
@@ -2111,13 +2113,17 @@ class SAMWidget(QWidget):
                         continue
                 r_min, c_min = poly.min(axis=0)
                 r_max, c_max = poly.max(axis=0)
-                existing_bboxes.append(
-                    (
-                        math.floor(r_min),
-                        math.floor(c_min),
-                        math.ceil(r_max),
-                        math.ceil(c_max),
-                    )
+                existing.append(
+                    {
+                        "bbox": (
+                            math.floor(r_min),
+                            math.floor(c_min),
+                            math.ceil(r_max),
+                            math.ceil(c_max),
+                        ),
+                        "polygon": poly,
+                        "mask": None,
+                    }
                 )
 
         count = 0
@@ -2130,30 +2136,17 @@ class SAMWidget(QWidget):
             if not m.any():
                 continue
 
-            # bbox-IoU check
-            if existing_bboxes and iou_threshold > 0:
+            if iou_threshold > 0:
                 rows, cols = np.where(m)
-                nr_min = int(rows.min())
-                nr_max = int(rows.max())
-                nc_min = int(cols.min())
-                nc_max = int(cols.max())
-                dup = False
-                for er, ec, er2, ec2 in existing_bboxes:
-                    ir_min = max(nr_min, er)
-                    ic_min = max(nc_min, ec)
-                    ir_max = min(nr_max, er2)
-                    ic_max = min(nc_max, ec2)
-                    if ir_min <= ir_max and ic_min <= ic_max:
-                        inter = (ir_max - ir_min + 1) * (ic_max - ic_min + 1)
-                    else:
-                        inter = 0
-                    a_new = (nr_max - nr_min + 1) * (nc_max - nc_min + 1)
-                    a_ex = (er2 - er + 1) * (ec2 - ec + 1)
-                    union = a_new + a_ex - inter
-                    if union > 0 and inter / union >= iou_threshold:
-                        dup = True
-                        break
-                if dup:
+                new_bbox = (
+                    int(rows.min()),
+                    int(cols.min()),
+                    int(rows.max()),
+                    int(cols.max()),
+                )
+                if self._is_duplicate_mask(
+                    m, new_bbox, existing, iou_threshold
+                ):
                     skipped += 1
                     continue
 
@@ -2167,17 +2160,10 @@ class SAMWidget(QWidget):
                     output_layer.feature_defaults[k] = v
             output_layer.add_polygons([polygon], edge_width=2)
 
-            # Add new bbox for subsequent duplicate checks
+            # Compare subsequent candidates against this one too
             if iou_threshold > 0:
-                r_min, c_min = polygon.min(axis=0)
-                r_max, c_max = polygon.max(axis=0)
-                existing_bboxes.append(
-                    (
-                        int(r_min),
-                        int(c_min),
-                        int(r_max),
-                        int(c_max),
-                    )
+                existing.append(
+                    {"bbox": new_bbox, "polygon": polygon, "mask": m}
                 )
             count += 1
 
@@ -2186,6 +2172,36 @@ class SAMWidget(QWidget):
         if count > 0:
             output_layer.refresh_text()
         return count
+
+    @staticmethod
+    def _is_duplicate_mask(mask, bbox, existing, iou_threshold):
+        """Whether ``mask`` overlaps an existing annotation too closely.
+
+        The overlap is measured between the actual masks rather than
+        their bounding boxes: two diagonal structures crossing in an X
+        have nearly identical boxes while barely overlapping, and box
+        IoU alone would discard the second one. Boxes are still used as
+        a cheap reject, since masks inside disjoint boxes cannot touch.
+        """
+        from skimage.draw import polygon2mask as _polygon2mask
+
+        nr_min, nc_min, nr_max, nc_max = bbox
+        for entry in existing:
+            er, ec, er2, ec2 = entry["bbox"]
+            if max(nr_min, er) > min(nr_max, er2) or max(nc_min, ec) > min(
+                nc_max, ec2
+            ):
+                continue
+            if entry["mask"] is None:
+                entry["mask"] = _polygon2mask(mask.shape, entry["polygon"])
+            other = entry["mask"]
+            intersection = np.count_nonzero(other & mask)
+            if not intersection:
+                continue
+            union = np.count_nonzero(other | mask)
+            if union > 0 and intersection / union >= iou_threshold:
+                return True
+        return False
 
     def _get_selected_exemplar_boxes(self) -> list:
         """Return bbox [x1,y1,x2,y2] list from selected output shapes."""

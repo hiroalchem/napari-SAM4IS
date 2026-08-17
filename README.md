@@ -157,6 +157,7 @@ When using SAM 3, additional features are available for batch detection:
 5. **IoU duplicate filtering**: To prevent overlapping annotations, the plugin automatically filters out masks that overlap with existing shapes above a configurable IoU threshold (default: 0.5).
    - Adjust the threshold using the **IoU Threshold** spinner.
    - Check **Same class only** to only filter duplicates within the same class, or uncheck it to filter across all classes.
+   - The overlap is measured between the masks themselves. Bounding boxes are only used to skip pairs that cannot touch, so two elongated objects crossing in an X — nearly identical boxes, almost no shared area — are correctly kept as separate detections.
 
 ### Manual Annotation (without SAM)
 You can also annotate without using SAM by enabling **Manual Mode**.

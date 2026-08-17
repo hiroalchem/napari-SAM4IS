@@ -372,3 +372,92 @@ class TestClosureVertexRecovery:
         widget._split_selected_rings()
 
         assert len(layer.data) > 1
+
+
+def band(start, end, width=6, size=200):
+    """A thick line segment, as an elongated diagonal object."""
+    from skimage.draw import polygon as draw_polygon
+
+    direction = np.array(end, float) - np.array(start, float)
+    direction /= np.linalg.norm(direction)
+    normal = np.array([-direction[1], direction[0]]) * width
+    corners = np.array(
+        [
+            start + normal,
+            end + normal,
+            end - normal,
+            start - normal,
+        ]
+    )
+    mask = np.zeros((size, size), bool)
+    mask[draw_polygon(corners[:, 0], corners[:, 1], (size, size))] = True
+    return mask
+
+
+def entry(mask=None, polygon=None, bbox_of=None):
+    rows, cols = np.where(bbox_of if bbox_of is not None else mask)
+    return {
+        "bbox": (
+            int(rows.min()),
+            int(cols.min()),
+            int(rows.max()),
+            int(cols.max()),
+        ),
+        "polygon": polygon,
+        "mask": mask,
+    }
+
+
+def is_duplicate(mask, existing, threshold=0.5):
+    from napari_sam4is._widget import SAMWidget
+
+    rows, cols = np.where(mask)
+    bbox = (
+        int(rows.min()),
+        int(cols.min()),
+        int(rows.max()),
+        int(cols.max()),
+    )
+    return SAMWidget._is_duplicate_mask(mask, bbox, existing, threshold)
+
+
+class TestDuplicateDetection:
+    """Detect All dedup compares masks, not bounding boxes."""
+
+    def test_crossing_diagonals_are_not_duplicates(self):
+        a = band((20, 20), (180, 180))
+        b = band((180, 20), (20, 180))
+        # their bounding boxes are nearly identical, their masks are not
+        assert not is_duplicate(b, [entry(mask=a)])
+
+    def test_near_identical_masks_are_duplicates(self):
+        a = np.zeros((200, 200), bool)
+        a[disk((100, 100), 40)] = True
+        b = np.zeros((200, 200), bool)
+        b[disk((102, 100), 40)] = True
+        assert is_duplicate(b, [entry(mask=a)])
+
+    def test_object_inside_a_donut_hole_is_not_a_duplicate(self):
+        donut = np.zeros((200, 200), bool)
+        donut[disk((100, 100), 40)] = True
+        donut[disk((100, 100), 25)] = False
+        core = np.zeros((200, 200), bool)
+        core[disk((100, 100), 10)] = True
+        assert not is_duplicate(core, [entry(mask=donut)])
+
+    def test_existing_polygons_are_rasterized_on_demand(self):
+        a = np.zeros((200, 200), bool)
+        a[disk((100, 100), 40)] = True
+        pending = entry(polygon=label2polygon(a)[0], bbox_of=a)
+        assert pending["mask"] is None
+        assert is_duplicate(a, [pending])
+        assert pending["mask"] is not None
+
+    def test_disjoint_boxes_skip_rasterization(self):
+        a = np.zeros((200, 200), bool)
+        a[disk((30, 30), 12)] = True
+        b = np.zeros((200, 200), bool)
+        b[disk((160, 160), 12)] = True
+        pending = entry(polygon=label2polygon(a)[0], bbox_of=a)
+        assert not is_duplicate(b, [pending])
+        assert pending["mask"] is None  # never needed
