@@ -614,3 +614,54 @@ class TestBorderTouchingMasks:
         polygon = label2polygon(self.ragged_border_mask())[0]
         for centre in [(40, 220), (55, 270), (35, 310), (75, 250)]:
             assert triangles_in_hole(polygon, centre, 12) == 0
+
+
+class TestOverlappingShapesAreRejected:
+    """Hand-drawn shapes may cross, unlike contours traced from a mask.
+    The concatenated-ring form turns a shared area into a hole, so a
+    crossing pair must be refused rather than merged."""
+
+    OUTER = np.array([[0, 0], [60, 0], [60, 60], [0, 60]], float)
+    INNER = np.array([[10, 10], [50, 10], [50, 50], [10, 50]], float)
+    CROSSING = np.array([[40, 40], [100, 40], [100, 100], [40, 100]], float)
+
+    def test_crossing_rings_are_not_treated_as_nested(self):
+        from napari_sam4is._utils import group_rings_by_nesting
+
+        groups = group_rings_by_nesting([self.OUTER, self.CROSSING])
+        assert len(groups) == 2
+        assert all(not holes for _, holes in groups)
+
+    def test_nested_rings_still_form_a_hole(self):
+        from napari_sam4is._utils import group_rings_by_nesting
+
+        groups = group_rings_by_nesting([self.OUTER, self.INNER])
+        assert len(groups) == 1
+        assert len(groups[0][1]) == 1
+
+    def test_overlap_predicate(self):
+        from napari_sam4is._utils import rings_partially_overlap
+
+        assert rings_partially_overlap(self.OUTER, self.CROSSING)
+        assert not rings_partially_overlap(self.OUTER, self.INNER)
+        apart = self.OUTER + 500
+        assert not rings_partially_overlap(self.OUTER, apart)
+
+    def test_merge_refuses_a_crossing_shape(self, make_napari_viewer):
+        from napari_sam4is import SAMWidget
+
+        viewer = make_napari_viewer()
+        viewer.add_image(np.zeros((200, 200, 3), np.uint8))
+        widget = SAMWidget(viewer)
+        layer = widget._accepted_layer
+        widget._ensure_features_columns(layer)
+        # a valid nested pair plus one shape that merely crosses
+        layer.add_polygons(
+            [self.OUTER, self.INNER, self.CROSSING], edge_width=2
+        )
+        widget._shapes_layer_selection.setCurrentText(layer.name)
+        layer.selected_data = {0, 1, 2}
+        widget._merge_selected_to_holes()
+
+        assert len(layer.data) == 3  # nothing merged
+        assert "重なっている" in viewer.status

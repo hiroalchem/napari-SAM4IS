@@ -268,6 +268,31 @@ def polygon_to_rings(polygon):
     return rings or [poly]
 
 
+def _ring_inside(inner, outer):
+    """Whether every vertex of ``inner`` lies within ``outer``.
+
+    Testing a single vertex would call two partially overlapping rings
+    nested, which matters for shapes the user drew by hand: they are
+    free to overlap, unlike contours traced from one mask.
+    """
+    return bool(points_in_poly(inner, outer).all())
+
+
+def rings_partially_overlap(first, second):
+    """Whether two rings cross instead of nesting or staying apart.
+
+    The concatenated-ring form cannot express a union of overlapping
+    areas — the shared part cancels out and turns into a hole — so a
+    crossing pair has to be rejected rather than merged.
+    """
+    a_in_b = points_in_poly(first, second)
+    b_in_a = points_in_poly(second, first)
+    return bool(
+        (a_in_b.any() and not a_in_b.all())
+        or (b_in_a.any() and not b_in_a.all())
+    )
+
+
 def group_rings_by_nesting(rings):
     """Group rings into outer/hole pairs by containment.
 
@@ -286,11 +311,12 @@ def group_rings_by_nesting(rings):
     if not rings:
         return []
 
-    depth = np.zeros(len(rings), dtype=int)
+    inside = np.zeros((len(rings), len(rings)), dtype=bool)
     for i, inner in enumerate(rings):
         for j, outer in enumerate(rings):
-            if i != j and points_in_poly(inner[:1], outer)[0]:
-                depth[i] += 1
+            if i != j:
+                inside[i, j] = _ring_inside(inner, outer)
+    depth = inside.sum(axis=1)
 
     groups = []
     for i, ring in enumerate(rings):
@@ -299,8 +325,7 @@ def group_rings_by_nesting(rings):
         holes = [
             rings[j]
             for j in range(len(rings))
-            if depth[j] == depth[i] + 1
-            and points_in_poly(rings[j][:1], ring)[0]
+            if depth[j] == depth[i] + 1 and inside[j, i]
         ]
         groups.append((ring, holes))
     return groups

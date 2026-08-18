@@ -1,6 +1,7 @@
 import base64
 import inspect
 import io
+import itertools
 import json
 import math
 import os
@@ -56,6 +57,7 @@ from ._utils import (
     merge_rings_to_polygon,
     polygon_to_rings,
     preprocess,
+    rings_partially_overlap,
     to_uint8,
 )
 
@@ -2131,6 +2133,7 @@ class SAMWidget(QWidget):
                         ),
                         "polygon": poly,
                         "mask": None,
+                        "area": None,
                     }
                 )
 
@@ -2171,7 +2174,12 @@ class SAMWidget(QWidget):
             # Compare subsequent candidates against this one too
             if iou_threshold > 0:
                 existing.append(
-                    {"bbox": new_bbox, "polygon": polygon, "mask": m}
+                    {
+                        "bbox": new_bbox,
+                        "polygon": polygon,
+                        "mask": m,
+                        "area": int(np.count_nonzero(m)),
+                    }
                 )
             count += 1
 
@@ -2194,6 +2202,7 @@ class SAMWidget(QWidget):
         from skimage.draw import polygon2mask as _polygon2mask
 
         nr_min, nc_min, nr_max, nc_max = bbox
+        area = int(np.count_nonzero(mask))
         for entry in existing:
             er, ec, er2, ec2 = entry["bbox"]
             if max(nr_min, er) > min(nr_max, er2) or max(nc_min, ec) > min(
@@ -2202,11 +2211,12 @@ class SAMWidget(QWidget):
                 continue
             if entry["mask"] is None:
                 entry["mask"] = _polygon2mask(mask.shape, entry["polygon"])
-            other = entry["mask"]
-            intersection = np.count_nonzero(other & mask)
+            if entry.get("area") is None:
+                entry["area"] = int(np.count_nonzero(entry["mask"]))
+            intersection = np.count_nonzero(entry["mask"] & mask)
             if not intersection:
                 continue
-            union = np.count_nonzero(other | mask)
+            union = entry["area"] + area - intersection
             if union > 0 and intersection / union >= iou_threshold:
                 return True
         return False
@@ -2437,6 +2447,13 @@ class SAMWidget(QWidget):
         rings = []
         for idx in selected:
             rings.extend(polygon_to_rings(output_layer.data[idx]))
+        for first, second in itertools.combinations(rings, 2):
+            if rings_partially_overlap(first, second):
+                self._notify(
+                    "一部だけ重なっている shape はマージできません。"
+                    "完全に内側に収まるよう描き直してください"
+                )
+                return
         if not any(holes for _, holes in group_rings_by_nesting(rings)):
             self._notify("入れ子になっている shape がありません")
             return
