@@ -89,3 +89,5 @@ plans/
 uv.lock
 tmp/
 output/
+# local editor/scratch backups
+*.bak
