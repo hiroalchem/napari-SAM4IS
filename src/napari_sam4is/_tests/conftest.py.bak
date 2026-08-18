@@ -1,0 +1,38 @@
+"""Work around napari viewer teardown hang on macOS.
+
+napari 0.6.6 + PySide6 ≥6.9 can hang during ``viewer.close()`` in the
+``make_napari_viewer`` fixture teardown on macOS.  We override the
+fixture to forcibly shut down the QApplication after each test that
+creates a viewer, preventing the hang.
+"""
+
+import gc
+
+import pytest
+
+
+@pytest.fixture
+def make_napari_viewer(qtbot, request, monkeypatch):
+    """Lightweight make_napari_viewer that avoids teardown hangs."""
+    from qtpy.QtWidgets import QApplication
+
+    import napari
+
+    viewers = []
+
+    def factory(*args, **kwargs):
+        kwargs.setdefault("show", False)
+        viewer = napari.Viewer(*args, **kwargs)
+        viewers.append(viewer)
+        return viewer
+
+    yield factory
+
+    for viewer in viewers:
+        try:
+            viewer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    QApplication.processEvents()
+    gc.collect()

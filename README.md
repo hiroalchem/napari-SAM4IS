@@ -157,6 +157,7 @@ When using SAM 3, additional features are available for batch detection:
 5. **IoU duplicate filtering**: To prevent overlapping annotations, the plugin automatically filters out masks that overlap with existing shapes above a configurable IoU threshold (default: 0.5).
    - Adjust the threshold using the **IoU Threshold** spinner.
    - Check **Same class only** to only filter duplicates within the same class, or uncheck it to filter across all classes.
+   - The overlap is measured between the masks themselves. Bounding boxes are only used to skip pairs that cannot touch, so two elongated objects crossing in an X — nearly identical boxes, almost no shared area — are correctly kept as separate detections.
 
 ### Manual Annotation (without SAM)
 You can also annotate without using SAM by enabling **Manual Mode**.
@@ -166,6 +167,26 @@ You can also annotate without using SAM by enabling **Manual Mode**.
 3. Adjust brush size using napari's standard Labels controls.
 4. Press **A** to accept or **R** to reject, just like SAM mode.
 5. After accepting, the painted mask is converted to a polygon (instance mode) or merged into the output Labels layer (semantic mode), with the selected class assigned.
+
+### Shapes with Holes (Donut Shapes)
+Annotations with holes — a ring, a cell with its nucleus excluded, an object seen through an opening — are supported in instance mode.
+
+When SAM returns a mask that contains holes, they are preserved automatically on accept; no extra step is needed.
+
+To draw one by hand, napari's polygon tool cannot create a hole directly, so draw the rings separately and merge them:
+
+1. Draw the outer boundary as a normal polygon.
+2. Draw the inner boundary as a second polygon, fully inside the first.
+3. Select both shapes (shift-click) and press **H**, or click **Merge as Hole (H)**. They become a single annotation whose interior ring is a hole.
+4. To edit it later, select it and press **U** (**Split Rings**) to get the individual rings back, edit them, then merge again.
+
+Any shape fully contained in another becomes a hole; a shape nested inside a hole becomes a solid island again. Holes are written to COCO as a single polygon in napari's concatenated-ring form, and the reported `area` excludes them.
+
+> **Note**: hole rendering requires napari 0.6.0 or newer.
+
+**Editing a merged shape**: each ring is closed by repeating its first vertex, so those vertices appear twice and napari makes both copies clickable. Moving or deleting just one copy leaves a shape that still *looks* right but can no longer be split cleanly. Prefer **U** → edit → **H**, or **E** to redraw in SAM-Predict. If it does happen, **U** falls back to recovering the rings from the rendered shape, with coordinates rounded to pixels.
+
+**Downstream compatibility**: `pycocotools` and OpenCV (`cv2.fillPoly`) both rasterize this form correctly — verified against a reference donut mask. **Shapely does not**: `shapely.geometry.Polygon()` reports the ring as self-intersecting, and the usual `buffer(0)` repair silently fills the hole in. If your pipeline loads COCO polygons through Shapely, convert the rings explicitly with `Polygon(shell, holes)` instead.
 
 ### Annotation Attributes
 Each annotation can have additional attributes to support quality control workflows.

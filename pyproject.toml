@@ -33,7 +33,8 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "scikit-image>=0.21.0",
-    "napari>=0.4.19",
+    # 0.6.0 added Shapes support for polygons with holes (napari/napari#6654)
+    "napari>=0.6.0",
     "requests>=2.31.0",
     "urllib3>=2.0.0",
     "Pillow>=10.0.0",

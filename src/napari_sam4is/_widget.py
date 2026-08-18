@@ -1,6 +1,7 @@
 import base64
 import inspect
 import io
+import itertools
 import json
 import math
 import os
@@ -48,10 +49,15 @@ from ._utils import (
     find_first_missing,
     find_missing_class_number,
     get_available_model_names,
+    group_rings_by_nesting,
     label2polygon,
     load_json,
     load_model,
+    mask_to_rings,
+    merge_rings_to_polygon,
+    polygon_to_rings,
     preprocess,
+    rings_partially_overlap,
     to_uint8,
 )
 
@@ -371,6 +377,28 @@ class SAMWidget(QWidget):
         )
         self._send_to_predict_btn.setEnabled(False)
         self.vbox.addWidget(self._send_to_predict_btn)
+
+        # --- Hole (donut) shape buttons ---
+        _hole_row = QHBoxLayout()
+        self._merge_holes_btn = QPushButton("Merge as Hole (H)")
+        self._merge_holes_btn.setToolTip(
+            "選択した shape をまとめて穴あきの1つの shape にする\n"
+            "内側に完全に含まれる shape が穴になる\n"
+            "（2つ以上の shape を選択すると有効）"
+        )
+        self._merge_holes_btn.clicked.connect(self._merge_selected_to_holes)
+        self._merge_holes_btn.setEnabled(False)
+        _hole_row.addWidget(self._merge_holes_btn)
+
+        self._split_rings_btn = QPushButton("Split Rings (U)")
+        self._split_rings_btn.setToolTip(
+            "穴あき shape を編集できるようリングごとに分解する\n"
+            "（shape を1つ選択すると有効）"
+        )
+        self._split_rings_btn.clicked.connect(self._split_selected_rings)
+        self._split_rings_btn.setEnabled(False)
+        _hole_row.addWidget(self._split_rings_btn)
+        self.vbox.addLayout(_hole_row)
 
         # --- Annotation Attributes group ---
         self._attr_group = QGroupBox("Annotation Attributes")
@@ -946,6 +974,8 @@ class SAMWidget(QWidget):
         self._disconnect_output_layer_events()
         layer.events.highlight.connect(self._on_output_selection_changed)
         layer.bind_key("E", lambda _: self._send_selected_to_predict())
+        layer.bind_key("H", lambda _: self._merge_selected_to_holes())
+        layer.bind_key("U", lambda _: self._split_selected_rings())
         self._connected_output_layer = layer
 
     def _disconnect_output_layer_events(self):
@@ -957,8 +987,9 @@ class SAMWidget(QWidget):
                 self._connected_output_layer.events.highlight.disconnect(
                     self._on_output_selection_changed
                 )
-            with contextlib.suppress(TypeError, RuntimeError):
-                self._connected_output_layer.bind_key("E", None)
+            for key in ("E", "H", "U"):
+                with contextlib.suppress(TypeError, RuntimeError):
+                    self._connected_output_layer.bind_key(key, None)
             self._connected_output_layer = None
 
     # --- Display Settings Handlers ---
@@ -1053,6 +1084,8 @@ class SAMWidget(QWidget):
         self._uncertain_checkbox.setEnabled(True)
         self._accept_selected_btn.setEnabled(True)
         self._send_to_predict_btn.setEnabled(len(selected) == 1)
+        self._merge_holes_btn.setEnabled(len(selected) >= 2)
+        self._split_rings_btn.setEnabled(len(selected) == 1)
 
         # Unclear
         unclear_vals = features.loc[selected, "unclear"]
@@ -1116,6 +1149,8 @@ class SAMWidget(QWidget):
 
         self._accept_selected_btn.setEnabled(False)
         self._send_to_predict_btn.setEnabled(False)
+        self._merge_holes_btn.setEnabled(False)
+        self._split_rings_btn.setEnabled(False)
         self._attr_status_label.setText("No annotation selected")
 
     def _set_tristate_checkbox(self, checkbox, values):
@@ -2072,13 +2107,13 @@ class SAMWidget(QWidget):
                 "color": self._settings["text_color"],
             }
 
-        from skimage.measure import find_contours
-
         iou_threshold = self._iou_threshold_spin.value()
         same_class_only = self._iou_same_class_checkbox.isChecked()
 
-        # Pre-compute existing bboxes (inclusive int coords)
-        existing_bboxes = []
+        # Existing annotations to compare against. Their masks are
+        # rasterized lazily: a bounding box that misses the candidate
+        # rules the pair out without touching pixels.
+        existing = []
         if iou_threshold > 0:
             features = output_layer.features.reset_index(drop=True)
             for i, poly in enumerate(output_layer.data):
@@ -2088,13 +2123,18 @@ class SAMWidget(QWidget):
                         continue
                 r_min, c_min = poly.min(axis=0)
                 r_max, c_max = poly.max(axis=0)
-                existing_bboxes.append(
-                    (
-                        math.floor(r_min),
-                        math.floor(c_min),
-                        math.ceil(r_max),
-                        math.ceil(c_max),
-                    )
+                existing.append(
+                    {
+                        "bbox": (
+                            math.floor(r_min),
+                            math.floor(c_min),
+                            math.ceil(r_max),
+                            math.ceil(c_max),
+                        ),
+                        "polygon": poly,
+                        "mask": None,
+                        "area": None,
+                    }
                 )
 
         count = 0
@@ -2107,54 +2147,39 @@ class SAMWidget(QWidget):
             if not m.any():
                 continue
 
-            # bbox-IoU check
-            if existing_bboxes and iou_threshold > 0:
+            if iou_threshold > 0:
                 rows, cols = np.where(m)
-                nr_min = int(rows.min())
-                nr_max = int(rows.max())
-                nc_min = int(cols.min())
-                nc_max = int(cols.max())
-                dup = False
-                for er, ec, er2, ec2 in existing_bboxes:
-                    ir_min = max(nr_min, er)
-                    ic_min = max(nc_min, ec)
-                    ir_max = min(nr_max, er2)
-                    ic_max = min(nc_max, ec2)
-                    if ir_min <= ir_max and ic_min <= ic_max:
-                        inter = (ir_max - ir_min + 1) * (ic_max - ic_min + 1)
-                    else:
-                        inter = 0
-                    a_new = (nr_max - nr_min + 1) * (nc_max - nc_min + 1)
-                    a_ex = (er2 - er + 1) * (ec2 - ec + 1)
-                    union = a_new + a_ex - inter
-                    if union > 0 and inter / union >= iou_threshold:
-                        dup = True
-                        break
-                if dup:
+                new_bbox = (
+                    int(rows.min()),
+                    int(cols.min()),
+                    int(rows.max()),
+                    int(cols.max()),
+                )
+                if self._is_duplicate_mask(
+                    m, new_bbox, existing, iou_threshold
+                ):
                     skipped += 1
                     continue
 
-            contours = find_contours(m)
-            if not contours:
+            polygons = label2polygon(m)
+            if not polygons:
                 continue
-            polygon = contours[0].astype(int)
+            polygon = polygons[0]
             output_layer.feature_defaults["class"] = class_str
             for k, v in _ATTR_DEFAULTS.items():
                 if k != "class":
                     output_layer.feature_defaults[k] = v
             output_layer.add_polygons([polygon], edge_width=2)
 
-            # Add new bbox for subsequent duplicate checks
+            # Compare subsequent candidates against this one too
             if iou_threshold > 0:
-                r_min, c_min = polygon.min(axis=0)
-                r_max, c_max = polygon.max(axis=0)
-                existing_bboxes.append(
-                    (
-                        int(r_min),
-                        int(c_min),
-                        int(r_max),
-                        int(c_max),
-                    )
+                existing.append(
+                    {
+                        "bbox": new_bbox,
+                        "polygon": polygon,
+                        "mask": m,
+                        "area": int(np.count_nonzero(m)),
+                    }
                 )
             count += 1
 
@@ -2163,6 +2188,38 @@ class SAMWidget(QWidget):
         if count > 0:
             output_layer.refresh_text()
         return count
+
+    @staticmethod
+    def _is_duplicate_mask(mask, bbox, existing, iou_threshold):
+        """Whether ``mask`` overlaps an existing annotation too closely.
+
+        The overlap is measured between the actual masks rather than
+        their bounding boxes: two diagonal structures crossing in an X
+        have nearly identical boxes while barely overlapping, and box
+        IoU alone would discard the second one. Boxes are still used as
+        a cheap reject, since masks inside disjoint boxes cannot touch.
+        """
+        from skimage.draw import polygon2mask as _polygon2mask
+
+        nr_min, nc_min, nr_max, nc_max = bbox
+        area = int(np.count_nonzero(mask))
+        for entry in existing:
+            er, ec, er2, ec2 = entry["bbox"]
+            if max(nr_min, er) > min(nr_max, er2) or max(nc_min, ec) > min(
+                nc_max, ec2
+            ):
+                continue
+            if entry["mask"] is None:
+                entry["mask"] = _polygon2mask(mask.shape, entry["polygon"])
+            if entry.get("area") is None:
+                entry["area"] = int(np.count_nonzero(entry["mask"]))
+            intersection = np.count_nonzero(entry["mask"] & mask)
+            if not intersection:
+                continue
+            union = entry["area"] + area - intersection
+            if union > 0 and intersection / union >= iou_threshold:
+                return True
+        return False
 
     def _get_selected_exemplar_boxes(self) -> list:
         """Return bbox [x1,y1,x2,y2] list from selected output shapes."""
@@ -2341,6 +2398,131 @@ class SAMWidget(QWidget):
         print(
             "Shape を SAM-Predict に送りました。A で再 Accept してください。"
         )
+
+    def _notify(self, message):
+        """Report to napari's status bar as well as stdout.
+
+        napari is often launched without a visible terminal, where a
+        bare print looks like nothing happened at all.
+        """
+        print(message)
+        self._viewer.status = message
+
+    def _get_output_shapes_layer(self):
+        """Return the selected output Shapes layer, or None."""
+        layer = self._get_layer_by_name_safe(
+            self._shapes_layer_selection.currentText()
+        )
+        if not isinstance(layer, napari.layers.shapes.shapes.Shapes):
+            return None
+        return layer
+
+    def _replace_shapes(self, output_layer, indices, polygons, keep):
+        """Swap shapes for new ones, inheriting ``keep``'s attributes."""
+        attributes = output_layer.features.reset_index(drop=True).iloc[keep]
+        for key in _ATTR_DEFAULTS:
+            if key in attributes:
+                output_layer.feature_defaults[key] = attributes[key]
+        output_layer.selected_data = set(indices)
+        output_layer.remove_selected()
+        output_layer.add_polygons(polygons, edge_width=2)
+        output_layer.refresh_text()
+
+    def _merge_selected_to_holes(self):
+        """Combine selected shapes into one annotation with holes.
+
+        Drawing a ring inside a ring is not something the napari GUI can
+        express directly, so the rings are drawn as separate shapes and
+        merged here into napari's concatenated-ring form.
+        """
+        output_layer = self._get_output_shapes_layer()
+        if output_layer is None:
+            return
+
+        selected = sorted(output_layer.selected_data)
+        if len(selected) < 2:
+            self._notify("2つ以上の shape を選択してください")
+            return
+
+        rings = []
+        for idx in selected:
+            rings.extend(polygon_to_rings(output_layer.data[idx]))
+        for first, second in itertools.combinations(rings, 2):
+            if rings_partially_overlap(first, second):
+                self._notify(
+                    "一部だけ重なっている shape はマージできません。"
+                    "完全に内側に収まるよう描き直してください"
+                )
+                return
+        if not any(holes for _, holes in group_rings_by_nesting(rings)):
+            self._notify("入れ子になっている shape がありません")
+            return
+
+        merged = merge_rings_to_polygon(rings)
+        if merged is None:
+            self._notify("マージできませんでした")
+            return
+
+        # the enclosing shape carries the attributes of the result
+        outer = max(
+            selected,
+            key=lambda i: np.prod(
+                output_layer.data[i].max(axis=0)
+                - output_layer.data[i].min(axis=0)
+            ),
+        )
+        self._replace_shapes(output_layer, selected, [merged], outer)
+        self._notify("穴あきの1つの shape にマージしました")
+
+    def _split_selected_rings(self):
+        """Split a shape with holes back into one shape per ring."""
+        output_layer = self._get_output_shapes_layer()
+        if output_layer is None:
+            return
+
+        selected = sorted(output_layer.selected_data)
+        if len(selected) != 1:
+            self._notify("1つの shape を選択してください")
+            return
+
+        polygon = output_layer.data[selected[0]]
+        rings = polygon_to_rings(polygon)
+        if len(rings) < 2:
+            rings = self._rings_from_raster(polygon)
+            if rings is None:
+                self._notify("この shape に穴はありません")
+                return
+            self._notify(
+                "頂点編集で崩れたリング構造を描画結果から復元しました"
+                "（座標はピクセル単位に丸められます）"
+            )
+
+        self._replace_shapes(output_layer, selected, rings, selected[0])
+        self._notify(f"{len(rings)} 個のリングに分解しました")
+
+    def _rings_from_raster(self, polygon):
+        """Recover rings from a shape's rendered geometry.
+
+        Each ring is closed by repeating its first vertex, so those
+        vertices appear twice in the array and napari makes both copies
+        clickable. Moving or deleting only one copy leaves a shape that
+        still renders with its hole but can no longer be split from the
+        vertex list alone; rasterizing recovers the rings.
+
+        Returns None if the rendered shape has no hole after all.
+        """
+        from skimage.draw import polygon2mask as _polygon2mask
+
+        height, width = self._labels_layer.data.shape
+        groups = mask_to_rings(_polygon2mask((height, width), polygon))
+        if not any(holes for _, holes in groups):
+            return None
+
+        rings = []
+        for outer, holes in groups:
+            rings.append(np.round(outer))
+            rings.extend(np.round(hole) for hole in holes)
+        return rings
 
     def _encode_current_image_for_api(self):
         """Return (base64 JPEG, (H, W)) for the selected image as RGB uint8.
@@ -2606,17 +2788,31 @@ class SAMWidget(QWidget):
         height, width = image_shape[:2]
         mask = np.zeros((height, width), dtype=np.uint8)
 
-        for feature in geojson_data["features"]:
-            if feature["geometry"]["type"] == "Polygon":
-                coordinates = feature["geometry"]["coordinates"][0]
-                coords_array = np.array(coordinates)
+        def rings_to_mask(rings):
+            """First ring is the exterior, the rest are holes."""
+            sub = np.zeros((height, width), dtype=np.uint8)
+            for i, ring in enumerate(rings):
+                coords = np.array(ring)
+                if len(coords) < 3:
+                    continue
                 # GeoJSON is [x, y], polygon() expects (row, col) = (y, x)
                 rr, cc = polygon(
-                    coords_array[:, 1],
-                    coords_array[:, 0],
+                    coords[:, 1],
+                    coords[:, 0],
                     shape=(height, width),
                 )
-                mask[rr, cc] = 1
+                sub[rr, cc] = 0 if i else 1
+            return sub
+
+        for feature in geojson_data["features"]:
+            geometry = feature["geometry"]
+            # each feature is filled separately so that one feature's
+            # hole cannot erase an overlapping feature
+            if geometry["type"] == "Polygon":
+                mask |= rings_to_mask(geometry["coordinates"])
+            elif geometry["type"] == "MultiPolygon":
+                for part in geometry["coordinates"]:
+                    mask |= rings_to_mask(part)
 
         return mask
 
