@@ -42,14 +42,46 @@ def donut_mask(shape=(100, 100), outer=30, inner=12, center=(50, 50)):
     return mask
 
 
-def triangles_in_hole(polygon, center, radius):
-    """Count rendered face triangles falling inside the hole."""
-    from napari.layers.shapes._shapes_models import Polygon
+def rasterize(polygon):
+    """Paint the polygon's actual triangulation onto a canvas.
 
-    shape = Polygon(np.asarray(polygon, dtype=float))
-    centroids = shape._face_vertices[shape._face_triangles].mean(axis=1)
-    dist = np.hypot(centroids[:, 0] - center[0], centroids[:, 1] - center[1])
-    return int((dist < radius * 0.8).sum())
+    Counting triangle centroids instead would miss slivers, and would
+    also flag long triangles that merely pass over a region.
+    """
+    from napari.layers.shapes._shapes_models import Polygon
+    from skimage.draw import polygon as draw_polygon
+
+    verts = np.asarray(polygon, dtype=np.float32)
+    shape = Polygon(verts)
+    size = int(np.ceil(verts.max())) + 2
+    canvas = np.zeros((size, size), np.uint8)
+    for triangle in shape._face_vertices[shape._face_triangles]:
+        rows, cols = draw_polygon(triangle[:, 0], triangle[:, 1], canvas.shape)
+        canvas[rows, cols] = 1
+    return canvas
+
+
+def triangles_in_hole(polygon, center, radius):
+    """Painted pixels well inside a hole; 0 means the hole is open."""
+    canvas = rasterize(polygon)
+    rows, cols = disk(center, max(radius - 2, 1), shape=canvas.shape)
+    return int(canvas[rows, cols].sum())
+
+
+def bridges_removed(polygon):
+    """How many bridge edges napari cancelled out.
+
+    Each ring past the first is reached by a there-and-back detour, so
+    a correctly built polygon cancels exactly two edges per extra ring.
+    """
+    from napari.layers.shapes._accelerated_triangulate_dispatch import (
+        normalize_vertices_and_edges,
+    )
+
+    _, edges = normalize_vertices_and_edges(
+        np.asarray(polygon, dtype=np.float32), close=True
+    )
+    return len(polygon) - len(edges)
 
 
 class TestRingConversion:
@@ -511,3 +543,74 @@ class TestHoleButtonFeedback:
         layer.selected_data = {0}
         widget._merge_selected_to_holes()
         assert "2つ以上" in viewer.status
+
+
+class TestMultipleRings:
+    """Rings past the second are where the bridge cancellation broke:
+    chaining them head to tail leaves every bridge in place, so the
+    holes stay filled and the triangulator can give up entirely."""
+
+    OUTER = np.array([[0, 0], [100, 0], [100, 100], [0, 100]], float)
+    H1 = np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)
+    H2 = np.array([[60, 60], [80, 60], [80, 80], [60, 80]], float)
+    H3 = np.array([[10, 60], [30, 60], [30, 80], [10, 80]], float)
+
+    @pytest.mark.parametrize("count", [1, 2, 3])
+    def test_every_bridge_cancels(self, count):
+        holes = [self.H1, self.H2, self.H3][:count]
+        polygon = rings_to_polygon(self.OUTER, holes)
+        assert bridges_removed(polygon) == 2 * count
+        assert len(polygon_to_rings(polygon)) == count + 1
+
+    @pytest.mark.parametrize("count", [1, 2, 3])
+    def test_every_hole_stays_open(self, count):
+        holes = [self.H1, self.H2, self.H3][:count]
+        canvas = rasterize(rings_to_polygon(self.OUTER, holes))
+        for hole in holes:
+            centre = hole.mean(axis=0)
+            rows, cols = disk(centre, 6, shape=canvas.shape)
+            assert canvas[rows, cols].sum() == 0
+
+    def test_components_each_keep_their_hole(self):
+        mask = np.zeros((200, 200), np.uint8)
+        mask[disk((60, 60), 40)] = 1
+        mask[disk((60, 60), 20)] = 0
+        mask[disk((150, 150), 35)] = 1
+        mask[disk((150, 150), 15)] = 0
+
+        polygon = label2polygon(mask)[0]
+        assert len(polygon_to_rings(polygon)) == 4
+        assert bridges_removed(polygon) == 6
+        assert triangles_in_hole(polygon, (60, 60), 20) == 0
+        assert triangles_in_hole(polygon, (150, 150), 15) == 0
+
+
+class TestBorderTouchingMasks:
+    """A region running into the edge of the image gives an open
+    contour. Closing it with a straight chord cuts through the other
+    vertices on that edge, which used to crash the triangulator."""
+
+    def ragged_border_mask(self):
+        mask = np.zeros((120, 400), np.uint8)
+        mask[0:100, 182:338] = 1
+        for col in range(182, 338, 12):  # notches cutting the top edge
+            mask[0 : (col % 5) + 1, col : col + 5] = 0
+        for centre in [(40, 220), (55, 270), (35, 310), (75, 250)]:
+            mask[disk(centre, 12, shape=mask.shape)] = 0
+        return mask
+
+    def test_ragged_border_with_holes_triangulates(self):
+        from napari.layers.shapes._shapes_models import Polygon
+
+        polygon = label2polygon(self.ragged_border_mask())[0]
+        Polygon(polygon.astype(np.float32))  # must not raise
+
+    def test_border_contact_does_not_fragment_the_outline(self):
+        # padding keeps the notched top edge as one closed contour
+        rings = polygon_to_rings(label2polygon(self.ragged_border_mask())[0])
+        assert len(rings) == 5  # one outer boundary, four holes
+
+    def test_holes_survive_border_contact(self):
+        polygon = label2polygon(self.ragged_border_mask())[0]
+        for centre in [(40, 220), (55, 270), (35, 310), (75, 250)]:
+            assert triangles_in_hole(polygon, centre, 12) == 0

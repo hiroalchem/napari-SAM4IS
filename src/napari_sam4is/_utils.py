@@ -176,26 +176,41 @@ def _signed_area(ring):
     return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
 
 
-def rings_to_polygon(outer, holes=()):
-    """Concatenate an outer ring and hole rings into one napari polygon.
+def concatenate_rings(rings):
+    """Chain closed rings into one napari polygon.
 
-    napari (>= 0.6.0) represents a polygon with holes as a single vertex
-    array holding each ring explicitly closed, one after another. The
-    bridging edge between consecutive rings is traversed twice and is
-    discarded during triangulation, which is what opens up the hole.
+    napari (>= 0.6.0) opens up a hole by discarding every edge that the
+    outline walks twice, so each ring has to be entered and left along
+    the same bridge. Chaining the rings head to tail would instead form
+    a loop of bridges that each appear once and survive, which leaves
+    the holes filled in, so every ring after the first is walked as a
+    there-and-back detour from a single shared anchor vertex. The
+    implicit closing edge supplies the last hop back to the anchor.
 
     Args:
-        outer (np.ndarray): (N, 2) outer ring, open or explicitly closed
-        holes (iterable): rings to subtract from ``outer``
+        rings (list): open rings, the first one acting as the anchor
 
     :return: (M, 2) vertex array in napari's concatenated-ring form
+    """
+    anchor = rings[0][:1]
+    parts = [np.vstack([rings[0], anchor])]
+    for ring in rings[1:]:
+        parts.append(np.vstack([ring, ring[:1], anchor]))
+    polygon = np.concatenate(parts)
+    return polygon[:-1] if len(parts) > 1 else polygon
+
+
+def normalize_ring_group(outer, holes=()):
+    """Return ``[outer, *holes]`` with holes wound against the outer ring.
+
+    Raises ValueError if the outer ring is degenerate.
     """
     outer = _dedupe_consecutive(_open_ring(outer))
     if len(outer) < 3:
         raise ValueError("outer ring needs at least 3 distinct vertices")
 
     outer_sign = np.sign(_signed_area(outer)) or 1.0
-    parts = [np.vstack([outer, outer[:1]])]
+    rings = [outer]
     for hole in holes:
         ring = _dedupe_consecutive(_open_ring(hole))
         if len(ring) < 3:
@@ -203,16 +218,28 @@ def rings_to_polygon(outer, holes=()):
         # napari expects holes to wind opposite to the outer ring
         if np.sign(_signed_area(ring)) == outer_sign:
             ring = ring[::-1]
-        parts.append(np.vstack([ring, ring[:1]]))
-    return np.concatenate(parts)
+        rings.append(ring)
+    return rings
+
+
+def rings_to_polygon(outer, holes=()):
+    """Combine an outer ring and its holes into one napari polygon.
+
+    Args:
+        outer (np.ndarray): (N, 2) outer ring, open or explicitly closed
+        holes (iterable): rings to subtract from ``outer``
+
+    :return: (M, 2) vertex array in napari's concatenated-ring form
+    """
+    return concatenate_rings(normalize_ring_group(outer, holes))
 
 
 def polygon_to_rings(polygon):
     """Split a concatenated-ring polygon back into its rings.
 
-    Inverse of :func:`rings_to_polygon`. The first ring is the outer
-    boundary and any further rings are holes. A polygon that is not in
-    the canonical concatenated form is returned unchanged as a single
+    Inverse of :func:`concatenate_rings`. The first ring is an outer
+    boundary and the rest are holes or further components. A polygon
+    that is not in the canonical form is returned unchanged as a single
     ring, since splitting it would be ambiguous.
 
     Args:
@@ -235,6 +262,9 @@ def polygon_to_rings(polygon):
             return [poly]
         rings.append(ring)
         i += 2 + int(match[0])
+        # step over the hop back to the anchor before the next ring
+        if i < n and np.array_equal(poly[i], poly[0]):
+            i += 1
     return rings or [poly]
 
 
@@ -279,58 +309,70 @@ def group_rings_by_nesting(rings):
 def mask_to_rings(mask):
     """Extract outer/hole ring groups from a binary mask.
 
-    Contours touching the image border come back open from
-    ``find_contours``, so every ring is closed explicitly here.
+    The mask is padded with a background border first. Without it a
+    region running into the edge of the image yields an open contour,
+    and closing that with a straight chord draws a segment right
+    through the other vertices sitting on the same edge, which is
+    degenerate and makes triangulation fail.
 
     Args:
         mask (np.ndarray): 2D mask; non-zero pixels are foreground
 
     :return: list of ``(outer_ring, [hole_rings])`` tuples
     """
-    return group_rings_by_nesting(find_contours(np.asarray(mask) > 0, 0.5))
+    mask = np.asarray(mask) > 0
+    limit = np.array(mask.shape) - 1
+    contours = [
+        np.clip(contour - 1, 0, limit)
+        for contour in find_contours(np.pad(mask, 1), 0.5)
+    ]
+    return group_rings_by_nesting(contours)
 
 
 def merge_rings_to_polygon(rings):
     """Combine independent rings into one concatenated-ring polygon.
 
     Used to turn separately drawn shapes into a single annotation with
-    holes, which is awkward to draw directly in the napari GUI.
+    holes, which is awkward to draw directly in the napari GUI. All
+    groups share one chain so that every bridge cancels.
 
     Args:
         rings (iterable): (N, 2) vertex arrays
 
     :return: (M, 2) vertex array, or None if no usable ring was given
     """
-    parts = []
+    chain = []
     for outer, holes in group_rings_by_nesting(rings):
         try:
-            parts.append(rings_to_polygon(outer, holes))
+            chain.extend(normalize_ring_group(outer, holes))
         except ValueError:
             continue
-    return np.concatenate(parts) if parts else None
+    return concatenate_rings(chain) if chain else None
 
 
 def label2polygon(label):
     """Convert label to polygon
 
-    The mask becomes a single polygon in napari's concatenated-ring form,
-    so holes and disconnected components are preserved without changing
-    the one-mask-one-annotation model.
+    The mask becomes a single polygon in napari's concatenated-ring
+    form, so holes and disconnected components are preserved without
+    changing the one-mask-one-annotation model.
 
     Args:
         label (np.ndarray): label image
 
     :return: polygons
     """
-    parts = []
+    chain = []
     for outer, holes in mask_to_rings(label):
         try:
-            parts.append(
-                rings_to_polygon(np.round(outer), [np.round(h) for h in holes])
+            chain.extend(
+                normalize_ring_group(
+                    np.round(outer), [np.round(hole) for hole in holes]
+                )
             )
         except ValueError:
             continue
-    return [np.concatenate(parts)] if parts else []
+    return [concatenate_rings(chain)] if chain else []
 
 
 def create_json(
