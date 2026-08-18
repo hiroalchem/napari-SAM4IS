@@ -461,3 +461,53 @@ class TestDuplicateDetection:
         pending = entry(polygon=label2polygon(a)[0], bbox_of=a)
         assert not is_duplicate(b, [pending])
         assert pending["mask"] is None  # never needed
+
+
+class TestHoleButtonFeedback:
+    """napari is often launched without a visible terminal, so the
+    buttons must show when they are usable and say what happened."""
+
+    def build(self, make_napari_viewer):
+        from napari_sam4is import SAMWidget
+
+        viewer = make_napari_viewer()
+        viewer.add_image(np.zeros((200, 200, 3), np.uint8))
+        widget = SAMWidget(viewer)
+        layer = widget._accepted_layer
+        widget._ensure_features_columns(layer)
+        layer.add_polygons(
+            [
+                np.array([[10, 10], [90, 10], [90, 90], [10, 90]], float),
+                np.array([[40, 40], [60, 40], [60, 60], [40, 60]], float),
+            ],
+            edge_width=2,
+        )
+        widget._shapes_layer_selection.setCurrentText(layer.name)
+        return widget, layer, viewer
+
+    def test_buttons_track_the_selection(self, make_napari_viewer):
+        widget, layer, _ = self.build(make_napari_viewer)
+
+        layer.selected_data = set()
+        assert not widget._merge_holes_btn.isEnabled()
+        assert not widget._split_rings_btn.isEnabled()
+
+        layer.selected_data = {0}
+        assert not widget._merge_holes_btn.isEnabled()
+        assert widget._split_rings_btn.isEnabled()
+
+        layer.selected_data = {0, 1}
+        assert widget._merge_holes_btn.isEnabled()
+        assert not widget._split_rings_btn.isEnabled()
+
+    def test_result_reaches_the_status_bar(self, make_napari_viewer):
+        widget, layer, viewer = self.build(make_napari_viewer)
+        layer.selected_data = {0, 1}
+        widget._merge_selected_to_holes()
+        assert "マージ" in viewer.status
+
+    def test_refusal_reaches_the_status_bar(self, make_napari_viewer):
+        widget, layer, viewer = self.build(make_napari_viewer)
+        layer.selected_data = {0}
+        widget._merge_selected_to_holes()
+        assert "2つ以上" in viewer.status

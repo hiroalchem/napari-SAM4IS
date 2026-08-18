@@ -381,16 +381,20 @@ class SAMWidget(QWidget):
         self._merge_holes_btn = QPushButton("Merge as Hole (H)")
         self._merge_holes_btn.setToolTip(
             "選択した shape をまとめて穴あきの1つの shape にする\n"
-            "内側に完全に含まれる shape が穴になる"
+            "内側に完全に含まれる shape が穴になる\n"
+            "（2つ以上の shape を選択すると有効）"
         )
         self._merge_holes_btn.clicked.connect(self._merge_selected_to_holes)
+        self._merge_holes_btn.setEnabled(False)
         _hole_row.addWidget(self._merge_holes_btn)
 
         self._split_rings_btn = QPushButton("Split Rings (U)")
         self._split_rings_btn.setToolTip(
-            "穴あき shape を編集できるようリングごとに分解する"
+            "穴あき shape を編集できるようリングごとに分解する\n"
+            "（shape を1つ選択すると有効）"
         )
         self._split_rings_btn.clicked.connect(self._split_selected_rings)
+        self._split_rings_btn.setEnabled(False)
         _hole_row.addWidget(self._split_rings_btn)
         self.vbox.addLayout(_hole_row)
 
@@ -1078,6 +1082,8 @@ class SAMWidget(QWidget):
         self._uncertain_checkbox.setEnabled(True)
         self._accept_selected_btn.setEnabled(True)
         self._send_to_predict_btn.setEnabled(len(selected) == 1)
+        self._merge_holes_btn.setEnabled(len(selected) >= 2)
+        self._split_rings_btn.setEnabled(len(selected) == 1)
 
         # Unclear
         unclear_vals = features.loc[selected, "unclear"]
@@ -1141,6 +1147,8 @@ class SAMWidget(QWidget):
 
         self._accept_selected_btn.setEnabled(False)
         self._send_to_predict_btn.setEnabled(False)
+        self._merge_holes_btn.setEnabled(False)
+        self._split_rings_btn.setEnabled(False)
         self._attr_status_label.setText("No annotation selected")
 
     def _set_tristate_checkbox(self, checkbox, values):
@@ -2381,6 +2389,15 @@ class SAMWidget(QWidget):
             "Shape を SAM-Predict に送りました。A で再 Accept してください。"
         )
 
+    def _notify(self, message):
+        """Report to napari's status bar as well as stdout.
+
+        napari is often launched without a visible terminal, where a
+        bare print looks like nothing happened at all.
+        """
+        print(message)
+        self._viewer.status = message
+
     def _get_output_shapes_layer(self):
         """Return the selected output Shapes layer, or None."""
         layer = self._get_layer_by_name_safe(
@@ -2414,19 +2431,19 @@ class SAMWidget(QWidget):
 
         selected = sorted(output_layer.selected_data)
         if len(selected) < 2:
-            print("2つ以上の shape を選択してください")
+            self._notify("2つ以上の shape を選択してください")
             return
 
         rings = []
         for idx in selected:
             rings.extend(polygon_to_rings(output_layer.data[idx]))
         if not any(holes for _, holes in group_rings_by_nesting(rings)):
-            print("入れ子になっている shape がありません")
+            self._notify("入れ子になっている shape がありません")
             return
 
         merged = merge_rings_to_polygon(rings)
         if merged is None:
-            print("マージできませんでした")
+            self._notify("マージできませんでした")
             return
 
         # the enclosing shape carries the attributes of the result
@@ -2438,7 +2455,7 @@ class SAMWidget(QWidget):
             ),
         )
         self._replace_shapes(output_layer, selected, [merged], outer)
-        print("穴あきの1つの shape にマージしました")
+        self._notify("穴あきの1つの shape にマージしました")
 
     def _split_selected_rings(self):
         """Split a shape with holes back into one shape per ring."""
@@ -2448,7 +2465,7 @@ class SAMWidget(QWidget):
 
         selected = sorted(output_layer.selected_data)
         if len(selected) != 1:
-            print("1つの shape を選択してください")
+            self._notify("1つの shape を選択してください")
             return
 
         polygon = output_layer.data[selected[0]]
@@ -2456,15 +2473,15 @@ class SAMWidget(QWidget):
         if len(rings) < 2:
             rings = self._rings_from_raster(polygon)
             if rings is None:
-                print("この shape に穴はありません")
+                self._notify("この shape に穴はありません")
                 return
-            print(
+            self._notify(
                 "頂点編集で崩れたリング構造を描画結果から復元しました"
                 "（座標はピクセル単位に丸められます）"
             )
 
         self._replace_shapes(output_layer, selected, rings, selected[0])
-        print(f"{len(rings)} 個のリングに分解しました")
+        self._notify(f"{len(rings)} 個のリングに分解しました")
 
     def _rings_from_raster(self, polygon):
         """Recover rings from a shape's rendered geometry.
