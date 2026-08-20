@@ -28,7 +28,9 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-**Requirements**: Python 3.10-3.13
+**Requirements**: Python 3.10-3.13, napari 0.6.0+
+
+> **Upgrading from 1.1.0 or earlier**: napari 0.6.0 is now the minimum, up from 0.4.19. Earlier versions cannot display a polygon with holes, so an annotation saved with one would be drawn as solid. Update napari first if pip reports a conflict.
 
 ### Step 1: Install napari-SAM4IS
 
@@ -181,8 +183,6 @@ To draw one by hand, napari's polygon tool cannot create a hole directly, so dra
 4. To edit it later, select it and press **U** (**Split Rings**) to get the individual rings back, edit them, then merge again.
 
 Any shape fully contained in another becomes a hole; a shape nested inside a hole becomes a solid island again. Holes are written to COCO as a single polygon in napari's concatenated-ring form, and the reported `area` excludes them.
-
-> **Note**: hole rendering requires napari 0.6.0 or newer.
 
 **Editing a merged shape**: each ring is closed by repeating its first vertex, so those vertices appear twice and napari makes both copies clickable. Moving or deleting just one copy leaves a shape that still *looks* right but can no longer be split cleanly. Prefer **U** → edit → **H**, or **E** to redraw in SAM-Predict. If it does happen, **U** falls back to recovering the rings from the rendered shape, with coordinates rounded to pixels.
 
