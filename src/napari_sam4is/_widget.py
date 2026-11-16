@@ -60,6 +60,7 @@ from ._utils import (
     rings_partially_overlap,
     to_uint8,
 )
+from ._visibility import OutlineVisibility, make_visibility_buttons
 
 _ATTR_COLUMNS = {
     "class": str,
@@ -399,6 +400,10 @@ class SAMWidget(QWidget):
         self._split_rings_btn.setEnabled(False)
         _hole_row.addWidget(self._split_rings_btn)
         self.vbox.addLayout(_hole_row)
+
+        # --- Per-annotation outline hiding (see _visibility.py) ---
+        self._outline_visibility = OutlineVisibility(self._viewer)
+        self.vbox.addLayout(make_visibility_buttons(self._outline_visibility))
 
         # --- Annotation Attributes group ---
         self._attr_group = QGroupBox("Annotation Attributes")
@@ -976,6 +981,7 @@ class SAMWidget(QWidget):
         layer.bind_key("E", lambda _: self._send_selected_to_predict())
         layer.bind_key("H", lambda _: self._merge_selected_to_holes())
         layer.bind_key("U", lambda _: self._split_selected_rings())
+        self._outline_visibility.connect(layer)
         self._connected_output_layer = layer
 
     def _disconnect_output_layer_events(self):
@@ -990,6 +996,7 @@ class SAMWidget(QWidget):
             for key in ("E", "H", "U"):
                 with contextlib.suppress(TypeError, RuntimeError):
                     self._connected_output_layer.bind_key(key, None)
+            self._outline_visibility.disconnect()
             self._connected_output_layer = None
 
     # --- Display Settings Handlers ---

@@ -188,6 +188,16 @@ Any shape fully contained in another becomes a hole; a shape nested inside a hol
 
 **Downstream compatibility**: `pycocotools` and OpenCV (`cv2.fillPoly`) both rasterize this form correctly — verified against a reference donut mask. **Shapely does not**: `shapely.geometry.Polygon()` reports the ring as self-intersecting, and the usual `buffer(0)` repair silently fills the hole in. If your pipeline loads COCO polygons through Shapely, convert the rings explicitly with `Polygon(shell, holes)` instead.
 
+### Hiding Individual Annotation Outlines
+You can hide the outlines of selected annotations only, for example when overlapping annotations make the image hard to see.
+
+1. Select the annotations to hide in the output Shapes layer (shift+click to select several).
+2. Press **Alt+H** or click **Hide/Show Selected (Alt+H)** to hide their outlines.
+3. Select hidden annotations and press **Alt+H** again to show them. If the selection mixes hidden and visible annotations, all of them are hidden.
+4. Press **Alt+Shift+H** or click **Show All (Alt+Shift+H)** to show every hidden outline again. The button shows how many outlines are hidden.
+
+Hiding only changes the display. The shape, class and attributes of the annotation are unchanged, and hidden annotations are still saved. The hidden state itself is not saved, so all outlines are visible after reloading. Changing **Accepted edge color** in **Display Settings** also shows all outlines again.
+
 ### Annotation Attributes
 Each annotation can have additional attributes to support quality control workflows.
 
